@@ -4,7 +4,7 @@
   "description": "OpenAPS simulation",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js"
+    "start": "node app.js"
   },
   "keywords": [],
   "author": "",

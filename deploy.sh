@@ -1,5 +1,5 @@
 #!/bin/bash
 
 git add .
-git commit -m "upload to NS"
+git commit -m "cron job"
 git push -u origin scripts
