@@ -67,7 +67,7 @@
   "rewind_indicates_cartridge_change": false,
   "battery_indicates_battery_change": false,
   "maxSMBBasalMinutes": 75,
-  "curve": "rapid-acting",
+  "curve": "ultra-rapid",
   "useCustomPeakTime": false,
   "insulinPeakTime": 75,
   "dia": 6,
