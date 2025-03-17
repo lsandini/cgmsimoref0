@@ -373,3 +373,20 @@ For your simulation environment, you would only need to:
 3. Create a main loop that coordinates the process
 
 Given that the core algorithmic components are already in JavaScript, this is a much more efficient approach than translating all the bash scripts or trying to call them via child processes.
+
+
+cgmsimoref0/
+├── bin/                  # Your imported OpenAPS bin scripts
+├── node_modules/         # Created by npm
+├── lib/                  # Your custom wrapper code
+│   ├── nightscout.js     # Nightscout API client
+│   ├── simulator.js      # Pump/CGM simulation logic
+│   └── loop.js           # Main loop coordinator
+├── data/                 # Simulation data directory (mimics OpenAPS structure)
+│   ├── settings/         # Profile, targets, etc.
+│   ├── monitor/          # CGM data, pump status, etc.
+│   └── enact/            # Treatment recommendations
+├── index.js              # Entry point
+├── package.json
+└── README.md
+
