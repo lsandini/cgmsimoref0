@@ -1,5 +1,5 @@
 #!/bin/bash
 
 git add .
-git commit -m "add predictions, COB, fix IOB calculations"
+git commit -m ".env_SAMPLE + docs"
 git push -u origin scripts
