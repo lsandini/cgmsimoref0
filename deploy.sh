@@ -1,5 +1,5 @@
 #!/bin/bash
 
 git add .
-git commit -m "error fixes devicestatus II"
+git commit -m "add SMBs"
 git push -u origin scripts
