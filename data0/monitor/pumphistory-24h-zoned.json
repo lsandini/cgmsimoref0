@@ -1,34 +1,6 @@
 [
   {
     "_type": "Bolus",
-    "timestamp": "2025-03-21T21:20:01.610Z",
-    "amount": 0.1,
-    "insulin": 0.1,
-    "date": 1742592001610
-  },
-  {
-    "_type": "TempBasal",
-    "timestamp": "2025-03-21T21:20:01.590Z",
-    "rate": 0,
-    "duration": 30,
-    "temp": "absolute",
-    "date": 1742592001590
-  },
-  {
-    "_type": "TempBasalDuration",
-    "timestamp": "2025-03-21T21:20:01.590Z",
-    "duration (min)": 30,
-    "date": 1742592001590
-  },
-  {
-    "_type": "Bolus",
-    "timestamp": "2025-03-21T21:20:01.570Z",
-    "amount": 0.3,
-    "insulin": 0.3,
-    "date": 1742592001570
-  },
-  {
-    "_type": "Bolus",
     "timestamp": "2025-03-21T21:15:02.017Z",
     "amount": 0.3,
     "insulin": 0.3,
@@ -2083,5 +2055,19 @@
     "timestamp": "2025-03-20T22:30:01.845Z",
     "duration (min)": 0,
     "date": 1742509801845
+  },
+  {
+    "_type": "TempBasal",
+    "timestamp": "2025-03-20T21:20:01.093Z",
+    "rate": 0,
+    "duration": 60,
+    "temp": "absolute",
+    "date": 1742505601093
+  },
+  {
+    "_type": "TempBasalDuration",
+    "timestamp": "2025-03-20T21:20:01.093Z",
+    "duration (min)": 60,
+    "date": 1742505601093
   }
 ]

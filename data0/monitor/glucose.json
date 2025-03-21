@@ -1,12 +1,5 @@
 [
   {
-    "sgv": 118,
-    "date": 1742592007674,
-    "dateString": "2025-03-21T21:20:07.674Z",
-    "direction": "FortyFiveUp",
-    "type": "sgv"
-  },
-  {
     "sgv": 112,
     "date": 1742591707747,
     "dateString": "2025-03-21T21:15:07.747Z",
@@ -2013,6 +2006,13 @@
     "date": 1742505908172,
     "dateString": "2025-03-20T21:25:08.172Z",
     "direction": "SingleDown",
+    "type": "sgv"
+  },
+  {
+    "sgv": 125,
+    "date": 1742505607390,
+    "dateString": "2025-03-20T21:20:07.390Z",
+    "direction": "FortyFiveDown",
     "type": "sgv"
   }
 ]

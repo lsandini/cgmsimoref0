@@ -1,1 +1,22 @@
-{"carbs":30,"nsCarbs":30,"bwCarbs":0,"journalCarbs":0,"mealCOB":24,"currentDeviation":6.52,"maxDeviation":5.83,"minDeviation":-1.24,"slopeFromMaxDeviation":0,"slopeFromMinDeviation":1.528,"allDeviations":[7,6,5,2,0,-1],"lastCarbTime":1742490000000,"bwFound":false}
+{
+  "carbs": 20,
+  "nsCarbs": 20,
+  "bwCarbs": 0,
+  "journalCarbs": 0,
+  "mealCOB": 0,
+  "currentDeviation": null,
+  "maxDeviation": 0,
+  "minDeviation": 999,
+  "slopeFromMaxDeviation": 0,
+  "slopeFromMinDeviation": 999,
+  "allDeviations": [
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+  ],
+  "lastCarbTime": 1742582400000,
+  "bwFound": false
+}

@@ -1,0 +1,27 @@
+{
+    "dia": 5,
+    "curve": "rapid-acting",
+    "insulinPeakTime": 75,
+    "current_basal": 0.7,
+    "sens": 40,
+    "carb_ratio": 10,
+    "max_iob": 3,
+    "max_basal": 2,
+    "max_daily_basal": 1,
+    "min_bg": 100,
+    "max_bg": 120,
+    "target_bg": 110,
+    "max_daily_safety_multiplier": 3,
+    "current_basal_safety_multiplier": 4,
+    "autosens_max": 1.2,
+    "autosens_min": 0.7,
+    "enableUAM": true,
+    "enableSMB_with_COB": false,
+    "enableSMB_with_temptarget": false,
+    "enableSMB_always": false,
+    "min_5m_carbimpact": 8,
+    "remainingCarbsCap": 90,
+    "basalprofile": [
+      { "i": 0, "start": "00:00:00", "minutes": 0, "rate": 0.7 }
+    ]
+  }
