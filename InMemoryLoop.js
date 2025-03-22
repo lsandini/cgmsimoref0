@@ -14,7 +14,7 @@ const DEFAULT_PROFILE = {
   
   // Insulin parameters
   dia: 6,
-  curve: "rapid-acting",
+  curve: "ultra-rapid",
   useCustomPeakTime: false,
   insulinPeakTime: 75,
   
@@ -35,8 +35,8 @@ const DEFAULT_PROFILE = {
   // Safety parameters
   max_iob: 6,
   max_basal: 4,
-  max_daily_safety_multiplier: 4,
-  current_basal_safety_multiplier: 5,
+  max_daily_safety_multiplier: 3,
+  current_basal_safety_multiplier: 4,
   
   // Autosens settings
   autosens_max: 2,
@@ -144,7 +144,7 @@ class InMemoryLoop {
           }
         },
         basal_profile: [{ minutes: 0, rate: this.profileSettings.current_basal }],
-        autosens: { ratio: 1.0 }
+        autosens: { ratio: 0.78 }
       },
       monitor: {
         glucose: [],
@@ -226,7 +226,7 @@ class InMemoryLoop {
         if (profile.units === "mmol") {
           console.log("Original ISF from Nightscout (mmol/L):", sens);
           // Store the value in mg/dL for internal use
-          sens = sens / 18; // Convert from mmol/L to mg/dL
+          sens = sens * 18; // Convert from mmol/L to mg/dL
           console.log("Converted ISF for OpenAPS (mg/dL):", sens);
         } else {
           console.log("Using ISF directly (already in mg/dL):", sens);
@@ -254,7 +254,6 @@ class InMemoryLoop {
       
       // Convert mmol/L to mg/dL if necessary
       if (profile.units === "mmol") {
-        if (sens) sens = sens * 18; // Convert ISF from mmol/L to mg/dL
         if (min_bg) min_bg = min_bg * 18; // Convert min_bg from mmol/L to mg/dL
         if (max_bg) max_bg = max_bg * 18; // Convert max_bg from mmol/L to mg/dL
       }
@@ -262,7 +261,9 @@ class InMemoryLoop {
       // Update profile with extracted values
       this.data.settings.profile.dia = Number(dia || this.profileSettings.dia);
       this.data.settings.profile.current_basal = Number(current_basal || this.profileSettings.current_basal);
-      this.data.settings.profile.sens = Number(sens || this.profileSettings.sens);
+      this.data.settings.profile.isfProfile.sensitivities.forEach(entry => {
+        entry.sensitivity = sens; // Use the converted value for all sensitivity entries
+      });
       this.data.settings.profile.carb_ratio = Number(carb_ratio || this.profileSettings.carb_ratio);
       
       // Set min_bg and max_bg
@@ -271,8 +272,8 @@ class InMemoryLoop {
         this.data.settings.profile.max_bg = Number(max_bg);
       }
       
-      // Set output units based on Nightscout settings
-      this.data.settings.profile.out_units = profile.units === "mmol" ? "mmol/L" : "mg/dL";
+      // Force internal calculations to display in mg/dL
+      this.data.settings.profile.out_units = "mg/dL";
       
       // Create proper nested structures required by determine_basal
       
@@ -308,12 +309,12 @@ class InMemoryLoop {
       
       if (Array.isArray(profile.sens)) {
         profile.sens.forEach((entry, index) => {
-          // Convert mmol values to mg/dL for sensitivity
-          const sensitivity = profile.units === "mmol" ? entry.value * 18 : entry.value;
+          // Already converted above, use directly
+          const sensitivity = sens;
           
           this.data.settings.profile.isfProfile.sensitivities.push({
             i: index,
-            x: index, // x is used for plotting
+            x: index,
             sensitivity: sensitivity,
             offset: entry.timeAsSeconds / 60,
             start: entry.time + ":00",
@@ -415,6 +416,7 @@ class InMemoryLoop {
       console.log('- min_bg:', this.data.settings.profile.min_bg);
       console.log('- max_bg:', this.data.settings.profile.max_bg);
       console.log('- out_units:', this.data.settings.profile.out_units);
+      console.log('- ISF extracted from profile:', this.data.settings.profile.sens, 'mg/dL per U');
     } catch (error) {
       console.error('Error updating profile from Nightscout:', error);
     }
@@ -511,6 +513,14 @@ class InMemoryLoop {
       this.data.monitor.carbhistory = carbHistory;
   
       console.log(`Fetched ${pumpHistory.length} pump history records`);
+
+      console.log("Pump History Stats:", {
+        totalEntries: pumpHistory.length,
+        tempBasalCount: pumpHistory.filter(e => e._type === 'TempBasal').length,
+        bolusCount: pumpHistory.filter(e => e._type === 'Bolus').length,
+        oldestEntry: new Date(pumpHistory[pumpHistory.length-1].timestamp).toISOString(),
+        newestEntry: new Date(pumpHistory[0].timestamp).toISOString()
+      })
   
       return pumpHistory;
     } catch (error) {
@@ -585,119 +595,139 @@ class InMemoryLoop {
 
   calculateIOB() {
     try {
-      // Use oref0 iob module directly
-      const iobData = iob({
+      // Import the full OpenAPS IOB calculation chain
+      const generate = require('oref0/lib/iob');
+      
+      // Set up inputs exactly as oref0-calculate-iob would
+      const inputs = {
+        history: this.data.monitor.pumphistory,
         profile: this.data.settings.profile,
         clock: new Date().toISOString()
-      }, false, this.data.monitor.pumphistory);
+      };
       
-      // Find the most recent bolus for lastBolusTime
-      let lastBolusTime = 0;
-      
-      // Find the most recent bolus entry
-      const bolusEntries = this.data.monitor.pumphistory.filter(entry => 
-        entry._type === 'Bolus' && entry.amount > 0
-      );
-      
-      if (bolusEntries.length > 0) {
-        // Sort by date descending
-        bolusEntries.sort((a, b) => {
-          const dateA = a.date || new Date(a.timestamp).getTime();
-          const dateB = b.date || new Date(b.timestamp).getTime();
-          return dateB - dateA;
-        });
-        lastBolusTime = bolusEntries[0].date || new Date(bolusEntries[0].timestamp).getTime();
+      // Add autosens data if available
+      if (this.data.settings.autosens) {
+        inputs.autosens = this.data.settings.autosens;
       }
       
-      // Find the most recent temp basal
-      const tempBasalEntries = this.data.monitor.pumphistory.filter(entry => 
-        entry._type === 'TempBasal'
+      // Optional: Add 24h history if you have it separately
+      // inputs.history24 = this.data.monitor.pumphistory24;
+      
+      // Generate IOB using the full calculation chain
+      const iobData = generate(inputs);
+      
+      // Log the raw result for debugging
+      console.log('Raw IOB calculation result from generate():', 
+        iobData.length > 0 ? JSON.stringify(iobData[0]) : 'No IOB data'
       );
       
-      let lastTemp = null;
-      if (tempBasalEntries.length > 0) {
-        // Sort by date descending
-        tempBasalEntries.sort((a, b) => {
-          const dateA = a.date || new Date(a.timestamp).getTime();
-          const dateB = b.date || new Date(b.timestamp).getTime();
-          return dateB - dateA;
-        });
-        const latestTempBasal = tempBasalEntries[0];
-        
-        // Find corresponding duration entry
-        const durationEntry = this.data.monitor.pumphistory.find(entry => 
-          entry._type === 'TempBasalDuration' && 
-          Math.abs((entry.date || new Date(entry.timestamp).getTime()) - 
-                   (latestTempBasal.date || new Date(latestTempBasal.timestamp).getTime())) < 10000 // Within 10 seconds
+      // Add any additional fields your system needs
+      if (iobData.length > 0) {
+        // Find the most recent bolus for lastBolusTime
+        const bolusEntries = this.data.monitor.pumphistory.filter(entry => 
+          entry._type === 'Bolus' && entry.amount > 0
         );
         
-        lastTemp = {
-          rate: latestTempBasal.rate || 0,
-          timestamp: latestTempBasal.timestamp,
-          started_at: latestTempBasal.timestamp,
-          date: latestTempBasal.date || new Date(latestTempBasal.timestamp).getTime(),
-          duration: durationEntry ? durationEntry['duration (min)'] || 30 : 30
-        };
-      } else {
-        // Default lastTemp object if no temp basal found
-        lastTemp = {
-          rate: this.data.settings.profile.current_basal,
-          timestamp: new Date().toISOString(),
-          started_at: new Date().toISOString(),
-          date: new Date().getTime(),
-          duration: 0
-        };
-      }
-      
-      // Enhance the iob data with additional fields needed for OpenAPS
-      const now = new Date();
-      const mills = now.getTime();
-      const timeString = now.toISOString();
-      
-      // Ensure we have at least one element in the array
-      if (!iobData.length) {
-        iobData.push({
-          iob: 0,
-          activity: 0,
-          basaliob: 0,
-          bolusiob: 0
-        });
-      }
-      
-      // Update the first element with all required fields
-      if (iobData.length > 0) {
-        iobData[0] = {
-          ...iobData[0],
-          iob: iobData[0].iob || 0,
-          activity: iobData[0].activity || 0,
-          basaliob: iobData[0].basaliob || 0,
-          bolusiob: iobData[0].bolusiob || 0,
-          netbasalinsulin: iobData[0].netbasalinsulin || 0,
-          bolusinsulin: iobData[0].bolusinsulin || 0,
-          pumpBasalIOB: iobData[0].basaliob || 0, // Same as basaliob if not provided
-          time: timeString,
-          iobWithZeroTemp: {
-            iob: iobData[0].iobWithZeroTemp?.iob || iobData[0].iob || 0,
-            activity: iobData[0].iobWithZeroTemp?.activity || iobData[0].activity || 0,
-            basaliob: iobData[0].iobWithZeroTemp?.basaliob || iobData[0].basaliob || 0,
-            bolusiob: iobData[0].iobWithZeroTemp?.bolusiob || iobData[0].bolusiob || 0,
-            netbasalinsulin: iobData[0].iobWithZeroTemp?.netbasalinsulin || iobData[0].netbasalinsulin || 0,
-            bolusinsulin: iobData[0].iobWithZeroTemp?.bolusinsulin || iobData[0].bolusinsulin || 0,
-            time: timeString
-          },
-          lastBolusTime: lastBolusTime,
-          lastTemp: lastTemp,
-          timestamp: timeString,
-          mills: mills
-        };
+        let lastBolusTime = 0;
+        if (bolusEntries.length > 0) {
+          // Sort by date descending
+          bolusEntries.sort((a, b) => {
+            const dateA = a.date || new Date(a.timestamp).getTime();
+            const dateB = b.date || new Date(b.timestamp).getTime();
+            return dateB - dateA;
+          });
+          lastBolusTime = bolusEntries[0].date || new Date(bolusEntries[0].timestamp).getTime();
+          iobData[0].lastBolusTime = lastBolusTime;
+          
+          // Log bolus info for debugging
+          console.log(`Last bolus: ${bolusEntries[0].amount}U at ${new Date(lastBolusTime).toISOString()}`);
+          console.log(`Minutes since last bolus: ${Math.round((Date.now() - lastBolusTime) / 60000)}`);
+        } else {
+          console.log('No recent boluses found in pump history');
+        }
+        
+        // Find the most recent temp basal
+        const tempBasalEntries = this.data.monitor.pumphistory.filter(entry => 
+          entry._type === 'TempBasal'
+        );
+        
+        // Log recent temp basals for debugging
+        if (tempBasalEntries.length > 0) {
+          console.log("Recent temp basals:", tempBasalEntries.slice(0, 3).map(t => ({
+            rate: t.rate,
+            timestamp: t.timestamp,
+            duration: t.duration || "unknown"
+          })));
+        }
+        
+        let lastTemp = null;
+        if (tempBasalEntries.length > 0) {
+          // Sort by date descending
+          tempBasalEntries.sort((a, b) => {
+            const dateA = a.date || new Date(a.timestamp).getTime();
+            const dateB = b.date || new Date(b.timestamp).getTime();
+            return dateB - dateA;
+          });
+          const latestTempBasal = tempBasalEntries[0];
+          
+          // Find corresponding duration entry
+          const durationEntry = this.data.monitor.pumphistory.find(entry => 
+            entry._type === 'TempBasalDuration' && 
+            Math.abs((entry.date || new Date(entry.timestamp).getTime()) - 
+                    (latestTempBasal.date || new Date(latestTempBasal.timestamp).getTime())) < 10000
+          );
+          
+          lastTemp = {
+            rate: latestTempBasal.rate || 0,
+            timestamp: latestTempBasal.timestamp,
+            started_at: latestTempBasal.timestamp,
+            date: latestTempBasal.date || new Date(latestTempBasal.timestamp).getTime(),
+            duration: durationEntry ? (durationEntry['duration (min)'] || durationEntry.duration || 30) : 30
+          };
+          
+          iobData[0].lastTemp = lastTemp;
+        } else {
+          // Default lastTemp object if no temp basal found
+          const now = new Date();
+          lastTemp = {
+            rate: this.data.settings.profile.current_basal,
+            timestamp: now.toISOString(),
+            started_at: now.toISOString(),
+            date: now.getTime(),
+            duration: 0
+          };
+          
+          iobData[0].lastTemp = lastTemp;
+        }
+        
+        // Make sure timestamp and mills fields are set
+        const now = new Date();
+        iobData[0].timestamp = iobData[0].timestamp || now.toISOString();
+        iobData[0].mills = iobData[0].mills || now.getTime();
+        
+        // Ensure that all sub-objects are non-null (for safety)
+        if (!iobData[0].iobWithZeroTemp) {
+          iobData[0].iobWithZeroTemp = {
+            iob: iobData[0].iob || 0,
+            activity: iobData[0].activity || 0,
+            basaliob: iobData[0].basaliob || 0,
+            bolusiob: iobData[0].bolusiob || 0,
+            netbasalinsulin: iobData[0].netbasalinsulin || 0,
+            bolusinsulin: iobData[0].bolusinsulin || 0,
+            time: iobData[0].time || now.toISOString()
+          };
+        }
       }
       
       this.data.monitor.iob = iobData;
       
-      console.log('IOB Calculation Complete:', {
+      console.log('IOB Breakdown:', {
         totalIOB: iobData[0]?.iob || 0,
         basalIOB: iobData[0]?.basaliob || 0,
-        bolusIOB: iobData[0]?.bolusiob || 0
+        bolusIOB: iobData[0]?.bolusiob || 0,
+        netBasalInsulin: iobData[0]?.netbasalinsulin || 0,
+        zeroTempIOB: iobData[0]?.iobWithZeroTemp?.iob || 0,
+        historyWindow: "24 hours"
       });
       
       return iobData;
@@ -806,10 +836,17 @@ class InMemoryLoop {
       
       // Standard autosens
       const autosens_data = {
-        ratio: 1.0
+        ratio: 0.78
       };
       
       console.log(`Determine Basal Input - BG: ${bg}, IOB: ${iob_data[0].iob}, COB: ${meal_data.mealCOB}`);
+
+      console.log("Pre-determine_basal - Effective ISF:", {
+        profileSens: profile.sens,
+        firstSensitivity: profile.isfProfile.sensitivities[0].sensitivity,
+        autosensRatio: autosens_data.ratio,
+        effectiveISF: profile.sens * autosens_data.ratio
+      });
       
       // Call determine-basal with all required inputs
       const determineBasalResult = determine_basal(
@@ -821,6 +858,23 @@ class InMemoryLoop {
         meal_data,
         tempBasalFunctions
       );
+
+      console.log("Raw determine_basal result ISF:", {
+        isfInResult: determineBasalResult.ISF,
+        typeOfISF: typeof determineBasalResult.ISF,
+        valueInMgDl: determineBasalResult.ISF
+      });
+
+      if (determineBasalResult && profile.out_units === "mmol/L") {
+        // Store the original ISF value before it gets converted to a string
+        determineBasalResult.ISF_mgdl = determineBasalResult.ISF ? 
+          (parseFloat(determineBasalResult.ISF) * 18).toFixed(1) : null;
+        
+        console.log("Preserving ISF in mg/dL:", {
+          displayISF: determineBasalResult.ISF,
+          internalISF_mgdl: determineBasalResult.ISF_mgdl
+        });
+      }
       
       // Ensure we have required fields
       if (!determineBasalResult) {
@@ -1099,7 +1153,7 @@ class InMemoryLoop {
         enableSMB_with_COB: this.data.settings.profile.enableSMB_with_COB || true,
         enableSMB_with_temptarget: this.data.settings.profile.enableSMB_with_temptarget || false,
         enableUAM: this.data.settings.profile.enableUAM || true,
-        curve: this.data.settings.profile.curve || "rapid-acting",
+        curve: this.data.settings.profile.curve || "ultra-rapid",
         offline_hotspot: false,
         cgm: "g5-upload",
         timestamp: timeString
