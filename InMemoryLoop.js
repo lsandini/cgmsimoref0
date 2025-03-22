@@ -4,6 +4,7 @@ const getLastGlucose = require('oref0/lib/glucose-get-last');
 const iob = require('oref0/lib/iob');
 const getMealData = require('oref0/lib/meal/total');
 const NightscoutClient = require('./nightscout');
+const findMealInputs = require('oref0/lib/meal/history');
 
 // Default profile settings at the top of the file for easy access and modification
 const DEFAULT_PROFILE = {
@@ -258,20 +259,20 @@ class InMemoryLoop {
     try {
       // Get treatments from the last 24 hours
       const treatments = await this.nightscout.getTreatments(1000);
-      
+  
       // Filter to last 24 hours only
       const oneDayAgo = new Date();
       oneDayAgo.setDate(oneDayAgo.getDate() - 1);
       const recentTreatments = treatments.filter(t => new Date(t.created_at) >= oneDayAgo);
-      
+  
       // Convert Nightscout treatments to pump history format
       const pumpHistory = [];
       const carbHistory = [];
-      
+  
       recentTreatments.forEach(treatment => {
         const timestamp = treatment.created_at || treatment.timestamp || new Date().toISOString();
         const dateNum = new Date(timestamp).getTime(); // Ensure date is a number
-        
+  
         // Convert bolus treatments
         if (treatment.insulin && treatment.eventType === 'Bolus') {
           pumpHistory.push({
@@ -282,7 +283,7 @@ class InMemoryLoop {
             date: dateNum
           });
         }
-        
+  
         // Convert temp basals
         if (treatment.eventType === 'Temp Basal') {
           pumpHistory.push({
@@ -293,7 +294,7 @@ class InMemoryLoop {
             temp: 'absolute',
             date: dateNum
           });
-          
+  
           // Add duration entry
           pumpHistory.push({
             _type: 'TempBasalDuration',
@@ -302,29 +303,28 @@ class InMemoryLoop {
             date: dateNum
           });
         }
-        
+  
         // Convert carb entries
         if (treatment.carbs) {
-          pumpHistory.push({
-            _type: 'Meal',
-            timestamp: timestamp,
-            carbs: parseInt(treatment.carbs),
-            date: dateNum
-          });
-          
-          carbHistory.push({
+          const carbEntry = {
+            _type: 'Meal', // Add _type field
+            timestamp: timestamp, // Add timestamp field
             carbs: parseInt(treatment.carbs),
             created_at: timestamp,
-            date: dateNum // Ensure date is a number
-          });
+            date: dateNum
+          };
+  
+          pumpHistory.push(carbEntry);
+          carbHistory.push(carbEntry);
         }
       });
-      
+  
       // Store in memory
       this.data.monitor.pumphistory = pumpHistory;
       this.data.monitor.carbhistory = carbHistory;
-      
+  
       console.log(`Fetched ${pumpHistory.length} pump history records`);
+  
       return pumpHistory;
     } catch (error) {
       console.error('Error fetching pump history:', error);
@@ -337,80 +337,21 @@ calculateMeal() {
     // Import meal data generation function
     const generateMealData = require('oref0/lib/meal');
 
-    // Custom implementation of meal input finding
-    function findMealInputs(inputs) {
-      const pumpHistory = inputs.history || [];
-      const carbHistory = inputs.carbs || [];
-      const profile = inputs.profile;
-      const mealInputs = [];
-      let duplicates = 0;
+    console.log('AAA carbhistory in calculateMeal:', this.data.monitor.carbhistory);
 
-      // Function to check for existing entries with same timestamp and property
-      function arrayHasElementWithSameTimestampAndProperty(array, t, propname) {
-        for (let j = 0; j < array.length; j++) {
-          const element = array[j];
-          if (element.timestamp === t && element[propname] !== undefined) return true;
-          if (element[propname] !== undefined) {
-            const eDate = new Date(element.timestamp);
-            const tDate = new Date(t);
-            const tMin = new Date(tDate.getTime() - 2000);
-            const tMax = new Date(tDate.getTime() + 2000);
-            if (eDate > tMin && eDate < tMax) return true;
-          }
-        }
-        return false;
-      }
-
-      // Process carb history
-      for (let i = 0; i < carbHistory.length; i++) {
-        const current = carbHistory[i];
-        if (current.carbs && current.created_at) {
-          const temp = {
-            timestamp: current.created_at,
-            carbs: current.carbs,
-            nsCarbs: current.carbs
-          };
-
-          if (!arrayHasElementWithSameTimestampAndProperty(mealInputs, current.created_at, "carbs")) {
-            mealInputs.push(temp);
-          } else {
-            duplicates += 1;
-          }
-        }
-      }
-
-      // Process pump history for bolus and other treatments
-      for (let i = 0; i < pumpHistory.length; i++) {
-        const current = pumpHistory[i];
-        
-        // Bolus entries
-        if (current._type === "Bolus" && current.timestamp) {
-          const temp = {
-            timestamp: current.timestamp,
-            bolus: current.amount
-          };
-
-          if (!arrayHasElementWithSameTimestampAndProperty(mealInputs, current.timestamp, "bolus")) {
-            mealInputs.push(temp);
-          } else {
-            duplicates += 1;
-          }
-        }
-      }
-
-      console.log('Custom Meal Inputs:', JSON.stringify(mealInputs, null, 2));
-      return mealInputs;
-    }
-
-    // Prepare inputs
+    // Prepare inputs with defensive checks
     const mealInputs = {
       history: this.data.monitor.pumphistory || [],
-      carbs: this.data.monitor.carbhistory || [],
+      carbs: this.data.monitor.carbhistory || [], // Ensure carbs is an array
       profile: this.data.settings.profile
     };
 
-    // Find treatments using custom implementation
+    console.log('BBB mealInputs in calculateMeal (first only):', mealInputs.history[0]);
+
+    // Find treatments using imported findMealInputs function
     const treatments = findMealInputs(mealInputs);
+
+    console.log('CCC treatments in calculateMeal:', treatments);
 
     // Prepare final inputs for meal data generation
     const mealDataInputs = {
@@ -422,18 +363,30 @@ calculateMeal() {
       clock: this.data.monitor.clock || new Date().toISOString()
     };
 
+    console.log('DDD-tr mealDataInputs in calculateMeal:', mealDataInputs.treatments[0]);
+    console.log('DDD-pr mealDataInputs in calculateMeal:', mealDataInputs.profile[0]);
+    console.log('DDD-hi mealDataInputs in calculateMeal:', mealDataInputs.history[0]);
+    console.log('DDD-gl mealDataInputs in calculateMeal:', mealDataInputs.glucose[0]);
+    console.log('DDD-ba mealDataInputs in calculateMeal:', mealDataInputs.basalprofile[0]);
+    console.log('DDD-cl mealDataInputs in calculateMeal:', mealDataInputs.clock
+      ? new Date(mealDataInputs.clock).toISOString()
+      : 'N/A');
+    console.log('====================================================');
+
     // Generate meal data
     const mealData = generateMealData(mealDataInputs);
-    
+
+    console.log('EEE generated mealData:', mealData);
+
     // Store the meal data in the monitor
     this.data.monitor.meal = mealData;
-    
+
     console.log('Meal data calculated:', {
       carbs: mealData.carbs,
       COB: mealData.mealCOB,
       lastCarbTime: mealData.lastCarbTime ? new Date(mealData.lastCarbTime).toISOString() : 'N/A'
     });
-    
+
     return mealData;
   } catch (error) {
     console.error('Error calculating meal data:', error);
