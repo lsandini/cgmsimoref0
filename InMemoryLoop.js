@@ -1042,6 +1042,74 @@ class InMemoryLoop {
       
       this.data.enact.enacted = enactedData;
       
+      // IMPORTANT: Check if we need to set a temp basal
+      // This is where we need to add explicit temp basal handling
+      if (safeRecommendations.duration > 0 || safeRecommendations.rate !== this.data.settings.profile.current_basal) {
+        // Set temp basal directly in memory
+        this.data.monitor.temp_basal = {
+          duration: safeRecommendations.duration,
+          rate: safeRecommendations.rate,
+          temp: 'absolute',
+          timestamp: new Date().toISOString()
+        };
+        
+        // Log that we're setting a temp basal
+        console.log(`Setting temp basal: ${safeRecommendations.rate}U/h for ${safeRecommendations.duration} minutes`);
+        
+        // Also add to pump history to ensure consistency
+        const now = new Date();
+        const timestamp = now.toISOString();
+        const dateNum = now.getTime();
+        
+        // Add TempBasal entry
+        const tempBasalEntry = {
+          _type: 'TempBasal',
+          timestamp: timestamp,
+          rate: safeRecommendations.rate,
+          temp: 'absolute',
+          date: dateNum
+        };
+        
+        // Add TempBasalDuration entry with specific format
+        const tempDurationEntry = {
+          _type: 'TempBasalDuration',
+          timestamp: timestamp,
+          'duration (min)': safeRecommendations.duration,
+          date: dateNum
+        };
+        
+        // Add to pump history - prepend to keep most recent first
+        this.data.monitor.pumphistory.unshift(tempBasalEntry);
+        this.data.monitor.pumphistory.unshift(tempDurationEntry);
+        
+        // Optionally, add code here to upload the temp basal to Nightscout as a treatment
+        try {
+          const nsTreatment = {
+            eventType: 'Temp Basal',
+            duration: safeRecommendations.duration,
+            rate: safeRecommendations.rate,
+            absolute: safeRecommendations.rate,
+            created_at: timestamp,
+            enteredBy: 'cgmsimoref0-node',
+            reason: safeRecommendations.reason
+          };
+          
+          await this.nightscout.uploadTreatments([nsTreatment]);
+          console.log('Uploaded temp basal treatment to Nightscout');
+        } catch (treatmentError) {
+          console.error('Error uploading temp basal treatment:', treatmentError);
+        }
+      } else if (safeRecommendations.duration === 0) {
+        // Cancel any existing temp basal
+        console.log('Cancelling any existing temp basal');
+        this.data.monitor.temp_basal = {
+          duration: 0,
+          rate: 0,
+          temp: 'absolute',
+          timestamp: new Date().toISOString()
+        };
+      }
+      
       // Create and upload devicestatus
       const deviceStatus = this.createDeviceStatus(safeRecommendations);
       
