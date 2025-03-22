@@ -5,6 +5,7 @@ const iob = require('oref0/lib/iob');
 const getMealData = require('oref0/lib/meal/total');
 const NightscoutClient = require('./nightscout');
 const findMealInputs = require('oref0/lib/meal/history');
+const generateMeal = require('oref0/lib/meal');
 
 // Default profile settings at the top of the file for easy access and modification
 const DEFAULT_PROFILE = {
@@ -202,33 +203,218 @@ class InMemoryLoop {
       const profileName = Object.keys(nsProfile.store)[0];
       const profile = nsProfile.store[profileName];
       
-      if (!profile) return;
-      
-      // Map Nightscout profile to oref0 profile
-      this.data.settings.profile.dia = profile.dia || this.profileSettings.dia;
-      this.data.settings.profile.carb_ratio = profile.carbratio || this.profileSettings.carb_ratio;
-      this.data.settings.profile.sens = profile.sens || this.profileSettings.sens;
-      this.data.settings.profile.current_basal = profile.basal || this.profileSettings.current_basal;
-      this.data.settings.profile.max_iob = profile.max_iob || this.profileSettings.max_iob;
-      this.data.settings.profile.max_basal = profile.max_basal || this.profileSettings.max_basal;
-      
-      // Target BG
-      if (profile.target_low && profile.target_high) {
-        this.data.settings.profile.min_bg = profile.target_low;
-        this.data.settings.profile.max_bg = profile.target_high;
+      if (!profile) {
+        console.error("No profile found in Nightscout profile store");
+        return;
       }
       
-      // Update basal profile
-      if (profile.basal) {
-        this.data.settings.basal_profile = [{ minutes: 0, rate: profile.basal }];
+      // Extract values from the profile arrays
+      let dia = profile.dia;
+      
+      // Extract current basal
+      let current_basal = null;
+      if (Array.isArray(profile.basal) && profile.basal.length > 0) {
+        current_basal = profile.basal[0].value;
       }
       
-      // Update ISF profile
+      // Extract sensitivity factor
+      let sens = null;
+      if (Array.isArray(profile.sens) && profile.sens.length > 0) {
+        sens = profile.sens[0].value;
+        
+        // Only convert if the profile is in mmol/L
+        if (profile.units === "mmol") {
+          console.log("Original ISF from Nightscout (mmol/L):", sens);
+          // Store the value in mg/dL for internal use
+          sens = sens / 18; // Convert from mmol/L to mg/dL
+          console.log("Converted ISF for OpenAPS (mg/dL):", sens);
+        } else {
+          console.log("Using ISF directly (already in mg/dL):", sens);
+        }
+      }
+
+      // Set the ISF directly - don't convert again later
+      this.data.settings.profile.sens = sens;
+      
+      // Extract carb ratio
+      let carb_ratio = null;
+      if (Array.isArray(profile.carbratio) && profile.carbratio.length > 0) {
+        carb_ratio = profile.carbratio[0].value;
+      }
+      
+      // Extract target BG
+      let min_bg = null;
+      let max_bg = null;
+      if (Array.isArray(profile.target_low) && profile.target_low.length > 0) {
+        min_bg = profile.target_low[0].value;
+      }
+      if (Array.isArray(profile.target_high) && profile.target_high.length > 0) {
+        max_bg = profile.target_high[0].value;
+      }
+      
+      // Convert mmol/L to mg/dL if necessary
+      if (profile.units === "mmol") {
+        if (sens) sens = sens * 18; // Convert ISF from mmol/L to mg/dL
+        if (min_bg) min_bg = min_bg * 18; // Convert min_bg from mmol/L to mg/dL
+        if (max_bg) max_bg = max_bg * 18; // Convert max_bg from mmol/L to mg/dL
+      }
+      
+      // Update profile with extracted values
+      this.data.settings.profile.dia = Number(dia || this.profileSettings.dia);
+      this.data.settings.profile.current_basal = Number(current_basal || this.profileSettings.current_basal);
+      this.data.settings.profile.sens = Number(sens || this.profileSettings.sens);
+      this.data.settings.profile.carb_ratio = Number(carb_ratio || this.profileSettings.carb_ratio);
+      
+      // Set min_bg and max_bg
+      if (min_bg !== null && max_bg !== null) {
+        this.data.settings.profile.min_bg = Number(min_bg);
+        this.data.settings.profile.max_bg = Number(max_bg);
+      }
+      
+      // Set output units based on Nightscout settings
+      this.data.settings.profile.out_units = profile.units === "mmol" ? "mmol/L" : "mg/dL";
+      
+      // Create proper nested structures required by determine_basal
+      
+      // Create basalprofile
+      this.data.settings.profile.basalprofile = [];
+      if (Array.isArray(profile.basal)) {
+        profile.basal.forEach((entry, index) => {
+          this.data.settings.profile.basalprofile.push({
+            i: index,
+            start: entry.time + ":00",
+            minutes: entry.timeAsSeconds / 60,
+            rate: entry.value
+          });
+        });
+      } else {
+        // Default profile if none exists
+        this.data.settings.profile.basalprofile = [
+          {
+            i: 0,
+            start: "00:00:00",
+            minutes: 0,
+            rate: this.data.settings.profile.current_basal
+          }
+        ];
+      }
+      
+      // Create isfProfile in the expected format
       this.data.settings.profile.isfProfile = {
-        sensitivities: [{ offset: 0, sensitivity: this.data.settings.profile.sens }]
+        units: "mg/dL",
+        user_preferred_units: profile.units === "mmol" ? "mmol/L" : "mg/dL",
+        sensitivities: []
       };
       
-      console.log('Profile updated from Nightscout');
+      if (Array.isArray(profile.sens)) {
+        profile.sens.forEach((entry, index) => {
+          // Convert mmol values to mg/dL for sensitivity
+          const sensitivity = profile.units === "mmol" ? entry.value * 18 : entry.value;
+          
+          this.data.settings.profile.isfProfile.sensitivities.push({
+            i: index,
+            x: index, // x is used for plotting
+            sensitivity: sensitivity,
+            offset: entry.timeAsSeconds / 60,
+            start: entry.time + ":00",
+            endOffset: index < profile.sens.length - 1 ? 
+              (profile.sens[index + 1].timeAsSeconds / 60) : 1440
+          });
+        });
+      } else {
+        // Default sensitivity if none exists
+        this.data.settings.profile.isfProfile.sensitivities = [
+          {
+            i: 0,
+            x: 0,
+            sensitivity: this.data.settings.profile.sens,
+            offset: 0,
+            start: "00:00:00",
+            endOffset: 1440
+          }
+        ];
+      }
+      
+      // Create bg_targets in the expected format
+      this.data.settings.profile.bg_targets = {
+        units: "mg/dL",
+        user_preferred_units: profile.units === "mmol" ? "mmol/L" : "mg/dL",
+        targets: []
+      };
+      
+      if (Array.isArray(profile.target_low) && Array.isArray(profile.target_high)) {
+        // Assuming target_low and target_high have the same length and times
+        profile.target_low.forEach((entry, index) => {
+          // Convert mmol values to mg/dL for targets if needed
+          const low = profile.units === "mmol" ? entry.value * 18 : entry.value;
+          const high = profile.units === "mmol" ? profile.target_high[index].value * 18 : profile.target_high[index].value;
+          
+          this.data.settings.profile.bg_targets.targets.push({
+            i: index,
+            x: index, // x is used for plotting
+            high: high,
+            start: entry.time + ":00",
+            low: low,
+            offset: entry.timeAsSeconds / 60,
+            max_bg: high,
+            min_bg: low
+          });
+        });
+      } else {
+        // Default targets if none exist
+        this.data.settings.profile.bg_targets.targets = [
+          {
+            i: 0,
+            x: 0,
+            high: this.data.settings.profile.max_bg,
+            start: "00:00:00",
+            low: this.data.settings.profile.min_bg,
+            offset: 0,
+            max_bg: this.data.settings.profile.max_bg,
+            min_bg: this.data.settings.profile.min_bg
+          }
+        ];
+      }
+      
+      // Create carb_ratios in the expected format
+      this.data.settings.profile.carb_ratios = {
+        units: "grams",
+        schedule: []
+      };
+      
+      if (Array.isArray(profile.carbratio)) {
+        profile.carbratio.forEach((entry, index) => {
+          this.data.settings.profile.carb_ratios.schedule.push({
+            x: index,
+            i: index,
+            start: entry.time + ":00",
+            offset: entry.timeAsSeconds / 60,
+            ratio: entry.value,
+            r: entry.value // Some versions of OpenAPS use 'r' instead of 'ratio'
+          });
+        });
+      } else {
+        // Default carb ratio if none exists
+        this.data.settings.profile.carb_ratios.schedule = [
+          {
+            x: 0,
+            i: 0,
+            start: "00:00:00",
+            offset: 0,
+            ratio: this.data.settings.profile.carb_ratio,
+            r: this.data.settings.profile.carb_ratio
+          }
+        ];
+      }
+      
+      console.log('Profile updated correctly from Nightscout:');
+      console.log('- dia:', this.data.settings.profile.dia);
+      console.log('- current_basal:', this.data.settings.profile.current_basal);
+      console.log('- sens:', this.data.settings.profile.sens);
+      console.log('- carb_ratio:', this.data.settings.profile.carb_ratio);
+      console.log('- min_bg:', this.data.settings.profile.min_bg);
+      console.log('- max_bg:', this.data.settings.profile.max_bg);
+      console.log('- out_units:', this.data.settings.profile.out_units);
     } catch (error) {
       console.error('Error updating profile from Nightscout:', error);
     }
@@ -238,13 +424,14 @@ class InMemoryLoop {
     try {
       const entries = await this.nightscout.getEntries();
       
-      // Convert to format expected by oref0
+      // Convert to format expected by oref0 and mark as fakecgm
       this.data.monitor.glucose = entries.map(entry => ({
         sgv: entry.sgv,
         date: entry.date,
         dateString: entry.dateString,
         direction: entry.direction,
-        type: entry.type || 'sgv'
+        type: entry.type || 'sgv',
+        device: "fakecgm" // Add this to bypass the flat CGM check
       }));
       
       console.log(`Fetched ${this.data.monitor.glucose.length} glucose readings`);
@@ -332,78 +519,69 @@ class InMemoryLoop {
     }
   }
 
-calculateMeal() {
-  try {
-    // Import meal data generation function
-    const generateMealData = require('oref0/lib/meal');
-
-    console.log('AAA carbhistory in calculateMeal:', this.data.monitor.carbhistory);
-
-    // Prepare inputs with defensive checks
-    const mealInputs = {
-      history: this.data.monitor.pumphistory || [],
-      carbs: this.data.monitor.carbhistory || [], // Ensure carbs is an array
-      profile: this.data.settings.profile
-    };
-
-    console.log('BBB mealInputs in calculateMeal (first only):', mealInputs.history[0]);
-
-    // Find treatments using imported findMealInputs function
-    const treatments = findMealInputs(mealInputs);
-
-    console.log('CCC treatments in calculateMeal:', treatments);
-
-    // Prepare final inputs for meal data generation
-    const mealDataInputs = {
-      treatments: treatments,
-      profile: this.data.settings.profile,
-      history: this.data.monitor.pumphistory || [],
-      glucose: this.data.monitor.glucose || [],
-      basalprofile: this.data.settings.profile.basalprofile,
-      clock: this.data.monitor.clock || new Date().toISOString()
-    };
-
-    console.log('DDD-tr mealDataInputs in calculateMeal:', mealDataInputs.treatments[0]);
-    console.log('DDD-pr mealDataInputs in calculateMeal:', mealDataInputs.profile[0]);
-    console.log('DDD-hi mealDataInputs in calculateMeal:', mealDataInputs.history[0]);
-    console.log('DDD-gl mealDataInputs in calculateMeal:', mealDataInputs.glucose[0]);
-    console.log('DDD-ba mealDataInputs in calculateMeal:', mealDataInputs.basalprofile[0]);
-    console.log('DDD-cl mealDataInputs in calculateMeal:', mealDataInputs.clock
-      ? new Date(mealDataInputs.clock).toISOString()
-      : 'N/A');
-    console.log('====================================================');
-
-    // Generate meal data
-    const mealData = generateMealData(mealDataInputs);
-
-    console.log('EEE generated mealData:', mealData);
-
-    // Store the meal data in the monitor
-    this.data.monitor.meal = mealData;
-
-    console.log('Meal data calculated:', {
-      carbs: mealData.carbs,
-      COB: mealData.mealCOB,
-      lastCarbTime: mealData.lastCarbTime ? new Date(mealData.lastCarbTime).toISOString() : 'N/A'
-    });
-
-    return mealData;
-  } catch (error) {
-    console.error('Error calculating meal data:', error);
-    console.error('Error stack:', error.stack);
-
-    return {
-      carbs: 0,
-      nsCarbs: 0,
-      bwCarbs: 0,
-      journalCarbs: 0,
-      mealCOB: 0,
-      currentDeviation: 0,
-      maxDeviation: 0,
-      minDeviation: 0
-    };
+  calculateMeal() {
+    try {
+      console.log('Calculating meal data...');
+      
+      // Structure inputs exactly as the oref0-meal.js command expects
+      const inputs = {
+        history: this.data.monitor.pumphistory,
+        profile: this.data.settings.profile,
+        clock: this.data.monitor.clock,
+        glucose: this.data.monitor.glucose,
+        basalprofile: this.data.settings.basal_profile,
+        carbs: this.data.monitor.carbhistory
+      };
+      
+      // Find treatments using meal history module
+      const treatments = findMealInputs(inputs);
+      console.log('Custom Meal Inputs:', treatments);
+      
+      // Count duplicate entries
+      const uniqueTimestamps = new Set();
+      let duplicateCount = 0;
+      
+      treatments.forEach(t => {
+        if (uniqueTimestamps.has(t.timestamp)) {
+          duplicateCount++;
+        } else {
+          uniqueTimestamps.add(t.timestamp);
+        }
+      });
+      
+      console.log(`Found ${duplicateCount} duplicate entries`);
+      
+      // Generate meal data using the oref0 library function
+      const mealData = generateMeal(inputs);
+      
+      // Store results
+      this.data.monitor.meal = mealData;
+      
+      console.log('Meal data calculated:', {
+        carbs: mealData.carbs,
+        COB: mealData.mealCOB,
+        lastCarbTime: mealData.lastCarbTime ? 
+          new Date(mealData.lastCarbTime).toISOString() : 'N/A'
+      });
+      
+      return mealData;
+    } catch (error) {
+      console.error('Error calculating meal data:', error);
+      console.error('Error stack:', error.stack);
+      
+      // Return a safe default if calculation fails
+      return {
+        carbs: 0,
+        nsCarbs: 0,
+        bwCarbs: 0,
+        journalCarbs: 0,
+        mealCOB: 0,
+        currentDeviation: 0,
+        maxDeviation: 0,
+        minDeviation: 0
+      };
+    }
   }
-}
 
   calculateIOB() {
     try {
@@ -413,9 +591,110 @@ calculateMeal() {
         clock: new Date().toISOString()
       }, false, this.data.monitor.pumphistory);
       
+      // Find the most recent bolus for lastBolusTime
+      let lastBolusTime = 0;
+      
+      // Find the most recent bolus entry
+      const bolusEntries = this.data.monitor.pumphistory.filter(entry => 
+        entry._type === 'Bolus' && entry.amount > 0
+      );
+      
+      if (bolusEntries.length > 0) {
+        // Sort by date descending
+        bolusEntries.sort((a, b) => {
+          const dateA = a.date || new Date(a.timestamp).getTime();
+          const dateB = b.date || new Date(b.timestamp).getTime();
+          return dateB - dateA;
+        });
+        lastBolusTime = bolusEntries[0].date || new Date(bolusEntries[0].timestamp).getTime();
+      }
+      
+      // Find the most recent temp basal
+      const tempBasalEntries = this.data.monitor.pumphistory.filter(entry => 
+        entry._type === 'TempBasal'
+      );
+      
+      let lastTemp = null;
+      if (tempBasalEntries.length > 0) {
+        // Sort by date descending
+        tempBasalEntries.sort((a, b) => {
+          const dateA = a.date || new Date(a.timestamp).getTime();
+          const dateB = b.date || new Date(b.timestamp).getTime();
+          return dateB - dateA;
+        });
+        const latestTempBasal = tempBasalEntries[0];
+        
+        // Find corresponding duration entry
+        const durationEntry = this.data.monitor.pumphistory.find(entry => 
+          entry._type === 'TempBasalDuration' && 
+          Math.abs((entry.date || new Date(entry.timestamp).getTime()) - 
+                   (latestTempBasal.date || new Date(latestTempBasal.timestamp).getTime())) < 10000 // Within 10 seconds
+        );
+        
+        lastTemp = {
+          rate: latestTempBasal.rate || 0,
+          timestamp: latestTempBasal.timestamp,
+          started_at: latestTempBasal.timestamp,
+          date: latestTempBasal.date || new Date(latestTempBasal.timestamp).getTime(),
+          duration: durationEntry ? durationEntry['duration (min)'] || 30 : 30
+        };
+      } else {
+        // Default lastTemp object if no temp basal found
+        lastTemp = {
+          rate: this.data.settings.profile.current_basal,
+          timestamp: new Date().toISOString(),
+          started_at: new Date().toISOString(),
+          date: new Date().getTime(),
+          duration: 0
+        };
+      }
+      
+      // Enhance the iob data with additional fields needed for OpenAPS
+      const now = new Date();
+      const mills = now.getTime();
+      const timeString = now.toISOString();
+      
+      // Ensure we have at least one element in the array
+      if (!iobData.length) {
+        iobData.push({
+          iob: 0,
+          activity: 0,
+          basaliob: 0,
+          bolusiob: 0
+        });
+      }
+      
+      // Update the first element with all required fields
+      if (iobData.length > 0) {
+        iobData[0] = {
+          ...iobData[0],
+          iob: iobData[0].iob || 0,
+          activity: iobData[0].activity || 0,
+          basaliob: iobData[0].basaliob || 0,
+          bolusiob: iobData[0].bolusiob || 0,
+          netbasalinsulin: iobData[0].netbasalinsulin || 0,
+          bolusinsulin: iobData[0].bolusinsulin || 0,
+          pumpBasalIOB: iobData[0].basaliob || 0, // Same as basaliob if not provided
+          time: timeString,
+          iobWithZeroTemp: {
+            iob: iobData[0].iobWithZeroTemp?.iob || iobData[0].iob || 0,
+            activity: iobData[0].iobWithZeroTemp?.activity || iobData[0].activity || 0,
+            basaliob: iobData[0].iobWithZeroTemp?.basaliob || iobData[0].basaliob || 0,
+            bolusiob: iobData[0].iobWithZeroTemp?.bolusiob || iobData[0].bolusiob || 0,
+            netbasalinsulin: iobData[0].iobWithZeroTemp?.netbasalinsulin || iobData[0].netbasalinsulin || 0,
+            bolusinsulin: iobData[0].iobWithZeroTemp?.bolusinsulin || iobData[0].bolusinsulin || 0,
+            time: timeString
+          },
+          lastBolusTime: lastBolusTime,
+          lastTemp: lastTemp,
+          timestamp: timeString,
+          mills: mills
+        };
+      }
+      
       this.data.monitor.iob = iobData;
       
-      console.log('IOB Calculation:', {
+      console.log('IOB Calculation Complete:', {
         totalIOB: iobData[0]?.iob || 0,
         basalIOB: iobData[0]?.basaliob || 0,
         bolusIOB: iobData[0]?.bolusiob || 0
@@ -424,8 +703,57 @@ calculateMeal() {
       return iobData;
     } catch (error) {
       console.error('Error calculating IOB:', error);
-      return [{ iob: 0, activity: 0, basaliob: 0, bolusiob: 0 }];
+      
+      // Return a safe default with all required fields
+      const now = new Date();
+      const mills = now.getTime();
+      const timeString = now.toISOString();
+      
+      const safeDefault = [{
+        iob: 0,
+        activity: 0,
+        basaliob: 0,
+        bolusiob: 0,
+        netbasalinsulin: 0,
+        bolusinsulin: 0,
+        pumpBasalIOB: 0,
+        time: timeString,
+        iobWithZeroTemp: {
+          iob: 0,
+          activity: 0,
+          basaliob: 0,
+          bolusiob: 0,
+          netbasalinsulin: 0,
+          bolusinsulin: 0,
+          time: timeString
+        },
+        lastBolusTime: 0,
+        lastTemp: {
+          rate: this.data.settings.profile.current_basal,
+          timestamp: timeString,
+          started_at: timeString,
+          date: mills,
+          duration: 0
+        },
+        timestamp: timeString,
+        mills: mills
+      }];
+      
+      this.data.monitor.iob = safeDefault;
+      return safeDefault;
     }
+  }
+
+  // Helper method to create default recommendation
+  getDefaultRecommendation() {
+    return {
+      reason: "Error in determine-basal algorithm. Using safe defaults.",
+      rate: this.data.settings.profile.current_basal,
+      duration: 0,
+      temp: "absolute",
+      deliverAt: new Date(),
+      eventualBG: this.data.monitor.glucose[0]?.sgv || 120
+    };
   }
 
   determineBasal() {
@@ -441,10 +769,7 @@ calculateMeal() {
       
       // Use the complete profile structure from our settings
       // No need to rebuild - use the structure directly
-      const profile = {
-        ...this.profileSettings,
-        type: "current"
-      };
+      const profile = this.data.settings.profile;
       
       // Log key settings for debugging
       console.log('$$$ Glucose status:', JSON.stringify(glucose_status, null, 2));
@@ -500,17 +825,31 @@ calculateMeal() {
       // Ensure we have required fields
       if (!determineBasalResult) {
         console.error("determine-basal returned null");
-        return {
-          reason: "Error: could not determine basal rate",
-          rate: 0,
-          duration: 0,
-          temp: "absolute",
-          deliverAt: new Date()
-        };
+        return this.getDefaultRecommendation();
       }
       
-      // Add missing fields
+      // Add missing fields when "doing nothing"
+      if (determineBasalResult.rate === undefined) {
+        determineBasalResult.rate = profile.current_basal; // Use current basal
+      }
+      
+      if (determineBasalResult.duration === undefined) {
+        determineBasalResult.duration = 0; // No temp basal duration
+      }
+      
       determineBasalResult.deliverAt = determineBasalResult.deliverAt || new Date();
+      
+      // Make sure eventualBG is set (this affects prediction data)
+      if (determineBasalResult.eventualBG === undefined) {
+        // Extract eventualBG from the reason string if possible
+        const eventualBGMatch = determineBasalResult.reason.match(/eventualBG (\d+)/);
+        if (eventualBGMatch && eventualBGMatch[1]) {
+          determineBasalResult.eventualBG = parseInt(eventualBGMatch[1]);
+        } else {
+          // Default to current BG if we can't extract it
+          determineBasalResult.eventualBG = glucose_status.glucose;
+        }
+      }
       
       console.log('Determine Basal Result:', {
         rate: determineBasalResult.rate,
@@ -518,6 +857,34 @@ calculateMeal() {
         reason: determineBasalResult.reason,
         eventualBG: determineBasalResult.eventualBG
       });
+
+          
+    // Log prediction data to see what's being returned
+    console.log("Predictions from determine_basal:", determineBasalResult.predBGs);
+    console.log("Keys in predBGs:", determineBasalResult.predBGs ? Object.keys(determineBasalResult.predBGs) : "none");
+    
+    if (determineBasalResult.predBGs) {
+      // If we have IOB predictions, log the first and last values
+      if (determineBasalResult.predBGs.IOB) {
+        console.log("IOB predictions length:", determineBasalResult.predBGs.IOB.length);
+        console.log("IOB predictions first:", determineBasalResult.predBGs.IOB[0]);
+        console.log("IOB predictions last:", determineBasalResult.predBGs.IOB[determineBasalResult.predBGs.IOB.length-1]);
+      }
+      
+      // If we have ZT predictions, log the first and last values
+      if (determineBasalResult.predBGs.ZT) {
+        console.log("ZT predictions length:", determineBasalResult.predBGs.ZT.length);
+        console.log("ZT predictions first:", determineBasalResult.predBGs.ZT[0]);
+        console.log("ZT predictions last:", determineBasalResult.predBGs.ZT[determineBasalResult.predBGs.ZT.length-1]);
+      }
+    }
+    
+    console.log('Determine Basal Result:', {
+      rate: determineBasalResult.rate,
+      duration: determineBasalResult.duration,
+      reason: determineBasalResult.reason,
+      eventualBG: determineBasalResult.eventualBG
+    });
       
       // Save the suggestion
       this.data.enact.suggested = determineBasalResult;
@@ -525,13 +892,7 @@ calculateMeal() {
       return determineBasalResult;
     } catch (error) {
       console.error('Error determining basal:', error.stack || error);
-      return {
-        reason: "Error in determine-basal algorithm. Using safe defaults.",
-        rate: 0,
-        duration: 0,
-        temp: "absolute",
-        deliverAt: new Date()
-      };
+      return this.getDefaultRecommendation();
     }
   }
 
@@ -539,9 +900,20 @@ calculateMeal() {
     console.log('Enacting treatments...');
     
     try {
+      // Ensure recommendations has valid properties
+      const safeRecommendations = {
+        ...recommendations,
+        rate: recommendations.rate !== undefined ? 
+          recommendations.rate : this.data.settings.profile.current_basal,
+        duration: recommendations.duration !== undefined ? 
+          recommendations.duration : 0,
+        eventualBG: recommendations.eventualBG || 
+          this.data.monitor.glucose[0]?.sgv || 120
+      };
+      
       // Prepare enacted data
       const enactedData = { 
-        ...recommendations, 
+        ...safeRecommendations, 
         enacted: true, 
         timestamp: new Date().toISOString(),
         received: true
@@ -549,16 +921,30 @@ calculateMeal() {
       
       this.data.enact.enacted = enactedData;
       
-      // Log the predBGs from recommendations
-      if (recommendations.predBGs) {
-        console.log('Prediction data found:', Object.keys(recommendations.predBGs));
-        console.log('IOB prediction length:', recommendations.predBGs.IOB ? recommendations.predBGs.IOB.length : 0);
-        console.log('ZT prediction length:', recommendations.predBGs.ZT ? recommendations.predBGs.ZT.length : 0);
-      }
-      
       // Create and upload devicestatus
-      const deviceStatus = this.createDeviceStatus(recommendations);
-      await this.nightscout.uploadDeviceStatus([deviceStatus]);
+      const deviceStatus = this.createDeviceStatus(safeRecommendations);
+      
+      console.log('=== UPLOADING DEVICE STATUSES ===');
+      console.log('Number of device statuses:', 1);
+      
+      // Extract all key fields first to make sure they exist before logging
+      const iobObj = deviceStatus.openaps.iob;
+      const basicIOBInfo = {
+        totalIOB: iobObj.iob || 0,
+        basalIOB: iobObj.basaliob || 0,
+        bolusIOB: iobObj.bolusiob || 0,
+        pumpBasalIOB: iobObj.pumpBasalIOB || 0,
+        time: iobObj.time || 'undefined'
+      };
+      
+      // Log a safe subset of the data for debugging
+      console.log('Device Status 1:', {
+        fullIOBObject: JSON.stringify(iobObj, null, 2),
+        ...basicIOBInfo
+      });
+      
+      const uploadResponse = await this.nightscout.uploadDeviceStatus([deviceStatus]);
+      console.log('Upload Response:', uploadResponse);
       
       return enactedData;
     } catch (error) {
@@ -569,51 +955,162 @@ calculateMeal() {
 
   createDeviceStatus(recommendations) {
     const now = new Date();
-    const iobData = this.data.monitor.iob[0] || { iob: 0, activity: 0 };
+    const mills = now.getTime();
+    const timeString = now.toISOString();
+    const iobData = this.data.monitor.iob[0] || {
+      iob: 0,
+      activity: 0,
+      basaliob: 0,
+      bolusiob: 0,
+      time: timeString,
+      timestamp: timeString,
+      mills: mills
+    };
     
     // Get most recent glucose reading
     const currentBG = this.data.monitor.glucose[0]?.sgv;
     
-    // Calculate pump basal IOB (this might need adjustment based on your specific requirements)
-    const pumpBasalIOB = iobData.basaliob || 0;
+    // Create a complete iob object with no undefined values
+    const completeIobObj = {
+      iob: iobData.iob || 0,
+      activity: iobData.activity || 0,
+      basaliob: iobData.basaliob || 0,
+      bolusiob: iobData.bolusiob || 0,
+      netbasalinsulin: iobData.netbasalinsulin || 0,
+      bolusinsulin: iobData.bolusinsulin || 0,
+      pumpBasalIOB: iobData.pumpBasalIOB || iobData.basaliob || 0,
+      time: iobData.time || timeString,
+      iobWithZeroTemp: {
+        iob: iobData.iobWithZeroTemp?.iob || iobData.iob || 0,
+        activity: iobData.iobWithZeroTemp?.activity || iobData.activity || 0,
+        basaliob: iobData.iobWithZeroTemp?.basaliob || iobData.basaliob || 0,
+        bolusiob: iobData.iobWithZeroTemp?.bolusiob || iobData.bolusiob || 0,
+        netbasalinsulin: iobData.iobWithZeroTemp?.netbasalinsulin || iobData.netbasalinsulin || 0,
+        bolusinsulin: iobData.iobWithZeroTemp?.bolusinsulin || iobData.bolusinsulin || 0,
+        time: iobData.iobWithZeroTemp?.time || iobData.time || timeString
+      },
+      lastBolusTime: iobData.lastBolusTime || 0,
+      lastTemp: iobData.lastTemp || {
+        rate: this.data.settings.profile.current_basal,
+        timestamp: timeString,
+        started_at: timeString,
+        date: mills,
+        duration: 0
+      },
+      timestamp: iobData.timestamp || timeString,
+      mills: iobData.mills || mills
+    };
     
+    // Use the predBGs directly from determine_basal
+    const predBGs = recommendations.predBGs || {};
+    
+    // Calculate glucose trend indicators
+    let tick = "+0";
+    if (this.data.monitor.glucose.length >= 2) {
+      const currentBG = this.data.monitor.glucose[0].sgv;
+      const prevBG = this.data.monitor.glucose[1].sgv;
+      const delta = currentBG - prevBG;
+      
+      if (delta >= 4) tick = "+4";
+      else if (delta >= 3) tick = "+3";
+      else if (delta >= 2) tick = "+2";
+      else if (delta >= 1) tick = "+1";
+      else if (delta <= -4) tick = "-4";
+      else if (delta <= -3) tick = "-3";
+      else if (delta <= -2) tick = "-2";
+      else if (delta <= -1) tick = "-1";
+      else tick = "+0";
+    }
+    
+    // Get current COB
+    const COB = Math.round(this.data.monitor.meal.mealCOB || 0);
+    
+    // Build the complete device status object
     return {
-      device: "openaps-node",
+      device: "openaps://cgmsimoref0-node",
       openaps: {
-        iob: {
-          iob: iobData.iob || 0,
-          activity: iobData.activity || 0,
-          basaliob: iobData.basaliob || 0,
-          bolusiob: iobData.bolusiob || 0,
-          pumpBasalIOB: pumpBasalIOB, // Add this line
-          time: now.toISOString(), // Add this line
-          timestamp: now.toISOString()
-        },
+        iob: completeIobObj,
         suggested: {
-          timestamp: now.toISOString(),
           temp: "absolute",
           bg: currentBG,
-          eventualBG: recommendations.eventualBG,
+          tick: tick,
+          eventualBG: recommendations.eventualBG || currentBG,
+          insulinReq: recommendations.insulinReq || 0,
+          reservoir: "180.4",
+          deliverAt: recommendations.deliverAt || timeString,
+          sensitivityRatio: recommendations.sensitivityRatio || 1.0,
+          predBGs: predBGs,
+          COB: COB,
+          IOB: completeIobObj.iob || 0,
+          BGI: recommendations.BGI || 0,
+          deviation: recommendations.deviation || 0,
+          ISF: recommendations.ISF || this.data.settings.profile.sens,
+          CR: recommendations.CR || this.data.settings.profile.carb_ratio,
+          target_bg: recommendations.target_bg || this.data.settings.profile.min_bg,
           reason: recommendations.reason,
-          rate: recommendations.rate,
           duration: recommendations.duration,
-          COB: this.data.monitor.meal.mealCOB,
-          IOB: iobData.iob,
-          predBGs: recommendations.predBGs || {}
+          rate: recommendations.rate,
+          timestamp: timeString,
+          mills: mills
         },
         enacted: {
-          timestamp: now.toISOString(),
+          reason: recommendations.reason,
+          temp: "absolute",
+          deliverAt: recommendations.deliverAt || timeString,
           rate: recommendations.rate,
           duration: recommendations.duration,
+          received: true,
+          timestamp: timeString,
+          mills: mills,
           bg: currentBG,
-          reason: recommendations.reason,
-          eventualBG: recommendations.eventualBG,
-          enacted: true,
-          received: true
+          tick: tick,
+          eventualBG: recommendations.eventualBG || currentBG,
+          predBGs: predBGs,
+          COB: COB,
+          IOB: completeIobObj.iob || 0
         },
         version: "0.7.1"
       },
-      created_at: now.toISOString()
+      pump: {
+        clock: timeString,
+        battery: {
+          voltage: 1.39,
+          status: "normal"
+        },
+        reservoir: 180.4,
+        status: {
+          status: "normal",
+          bolusing: false,
+          suspended: false,
+          timestamp: timeString
+        }
+      },
+      preferences: {
+        max_iob: this.data.settings.profile.max_iob || 6,
+        max_daily_safety_multiplier: this.data.settings.profile.max_daily_safety_multiplier || 4,
+        current_basal_safety_multiplier: this.data.settings.profile.current_basal_safety_multiplier || 5,
+        autosens_max: this.data.settings.profile.autosens_max || 2,
+        autosens_min: this.data.settings.profile.autosens_min || 0.7,
+        rewind_resets_autosens: true,
+        exercise_mode: false,
+        sensitivity_raises_target: true,
+        unsuspend_if_no_temp: false,
+        enableSMB_always: this.data.settings.profile.enableSMB_always || true,
+        enableSMB_with_COB: this.data.settings.profile.enableSMB_with_COB || true,
+        enableSMB_with_temptarget: this.data.settings.profile.enableSMB_with_temptarget || false,
+        enableUAM: this.data.settings.profile.enableUAM || true,
+        curve: this.data.settings.profile.curve || "rapid-acting",
+        offline_hotspot: false,
+        cgm: "g5-upload",
+        timestamp: timeString
+      },
+      uploader: {
+        batteryVoltage: 3861,
+        battery: 68
+      },
+      utcOffset: 0,
+      mills: mills,
+      created_at: timeString
     };
   }
 
