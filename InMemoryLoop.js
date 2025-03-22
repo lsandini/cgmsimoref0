@@ -44,11 +44,13 @@ const DEFAULT_PROFILE = {
   
   // SMB parameters
   enableUAM: true,
+  enableSMB_always: true,
   enableSMB_with_bolus: true,
   enableSMB_with_COB: true,
   enableSMB_with_temptarget: false,
   enableSMB_after_carbs: true,
   maxSMBBasalMinutes: 75,
+  maxUAMSMBBasalMinutes: 30,
   
   // Other parameters
   min_5m_carbimpact: 8,
@@ -847,6 +849,18 @@ class InMemoryLoop {
         autosensRatio: autosens_data.ratio,
         effectiveISF: profile.sens * autosens_data.ratio
       });
+
+      // Ensure SMB settings are properly set before calling determine_basal
+      console.log("SMB settings check:", {
+        enableSMB_always: profile.enableSMB_always,
+        enableSMB_with_COB: profile.enableSMB_with_COB,
+        enableUAM: profile.enableUAM
+      });
+
+      // If not already set in the profile, ensure they're enabled:
+      profile.enableSMB_always = true;
+      profile.enableSMB_with_COB = true; 
+      profile.enableUAM = true;
       
       // Call determine-basal with all required inputs
       const determineBasalResult = determine_basal(
@@ -856,7 +870,8 @@ class InMemoryLoop {
         profile,
         autosens_data,
         meal_data,
-        tempBasalFunctions
+        tempBasalFunctions,
+        true
       );
 
       console.log("Raw determine_basal result ISF:", {
