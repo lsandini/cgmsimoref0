@@ -193,6 +193,7 @@ class InMemoryLoop {
     }
   }
   
+
   // Extract and map Nightscout profile to oref0 profile format
   updateProfileFromNightscout(nsProfile) {
     if (!nsProfile || !nsProfile.store) {
@@ -409,6 +410,33 @@ class InMemoryLoop {
           }
         ];
       }
+
+      // Ensure basal profile is in the exact format expected
+      if (this.data.settings.profile.basalprofile && this.data.settings.profile.basalprofile.length > 0) {
+        console.log("Ensuring basal profile is in correct format for IOB calculations");
+        
+        // Make sure each entry has the right properties
+        this.data.settings.profile.basalprofile.forEach(entry => {
+          // Ensure all required properties exist
+          entry.i = entry.i || 0;
+          entry.start = entry.start || "00:00:00";
+          entry.minutes = entry.minutes || 0;
+          entry.rate = parseFloat(entry.rate);
+        });
+        
+        // Sort by minutes
+        this.data.settings.profile.basalprofile.sort((a, b) => a.minutes - b.minutes);
+      }
+
+      // Log critical profile settings for IOB calculation
+      console.log("Profile values used for IOB:", {
+        dia: this.data.settings.profile.dia,
+        current_basal: this.data.settings.profile.current_basal,
+        basal_profile_count: this.data.settings.profile.basalprofile?.length || 0,
+        curve: this.data.settings.profile.curve,
+        useCustomPeakTime: this.data.settings.profile.useCustomPeakTime,
+        insulinPeakTime: this.data.settings.profile.insulinPeakTime
+      });
       
       console.log('Profile updated correctly from Nightscout:');
       console.log('- dia:', this.data.settings.profile.dia);
@@ -464,42 +492,44 @@ class InMemoryLoop {
         const timestamp = treatment.created_at || treatment.timestamp || new Date().toISOString();
         const dateNum = new Date(timestamp).getTime(); // Ensure date is a number
   
-        // Convert bolus treatments
+        // Convert bolus treatments - match format exactly
         if (treatment.insulin && treatment.eventType === 'Bolus') {
           pumpHistory.push({
             _type: 'Bolus',
             timestamp: timestamp,
             amount: parseFloat(treatment.insulin),
-            insulin: parseFloat(treatment.insulin),
+            programmed: parseFloat(treatment.insulin), // Add this field
+            unabsorbed: 0, // Add this field
+            duration: 0, // Add this field
             date: dateNum
           });
         }
   
-        // Convert temp basals
+        // Convert temp basals - match format exactly
         if (treatment.eventType === 'Temp Basal') {
+          // TempBasal entry
           pumpHistory.push({
             _type: 'TempBasal',
             timestamp: timestamp,
             rate: parseFloat(treatment.rate || treatment.absolute),
-            duration: parseInt(treatment.duration),
-            temp: 'absolute',
+            temp: 'absolute', // Ensure this is consistent
             date: dateNum
           });
   
-          // Add duration entry
+          // TempBasalDuration entry with specific format
           pumpHistory.push({
             _type: 'TempBasalDuration',
             timestamp: timestamp,
-            'duration (min)': parseInt(treatment.duration),
+            'duration (min)': parseInt(treatment.duration), // Must use this exact property name
             date: dateNum
           });
         }
   
-        // Convert carb entries
+        // Convert carb entries - match format exactly
         if (treatment.carbs) {
           const carbEntry = {
-            _type: 'Meal', // Add _type field
-            timestamp: timestamp, // Add timestamp field
+            _type: 'Meal', // This might need to be different
+            timestamp: timestamp,
             carbs: parseInt(treatment.carbs),
             created_at: timestamp,
             date: dateNum
@@ -515,15 +545,6 @@ class InMemoryLoop {
       this.data.monitor.carbhistory = carbHistory;
   
       console.log(`Fetched ${pumpHistory.length} pump history records`);
-
-      console.log("Pump History Stats:", {
-        totalEntries: pumpHistory.length,
-        tempBasalCount: pumpHistory.filter(e => e._type === 'TempBasal').length,
-        bolusCount: pumpHistory.filter(e => e._type === 'Bolus').length,
-        oldestEntry: new Date(pumpHistory[pumpHistory.length-1].timestamp).toISOString(),
-        newestEntry: new Date(pumpHistory[0].timestamp).toISOString()
-      })
-  
       return pumpHistory;
     } catch (error) {
       console.error('Error fetching pump history:', error);
@@ -597,23 +618,43 @@ class InMemoryLoop {
 
   calculateIOB() {
     try {
+      // Profile basal settings logging
+      console.log("Profile basal settings:", {
+        current_basal: this.data.settings.profile.current_basal,
+        max_daily_basal: this.data.settings.profile.max_daily_basal,
+        basalprofile: this.data.settings.profile.basalprofile
+      });
+  
       // Import the full OpenAPS IOB calculation chain
       const generate = require('oref0/lib/iob');
+      
+      // Create a copy for the 24 hour history
+      const pumphistory24 = [...this.data.monitor.pumphistory]; 
+      
+      // Format clock exactly as the original implementation would
+      const now = new Date();
+      const clockTime = now.toISOString(); // Ensure UTC timestamps
       
       // Set up inputs exactly as oref0-calculate-iob would
       const inputs = {
         history: this.data.monitor.pumphistory,
+        history24: pumphistory24, // Add 24-hour history
         profile: this.data.settings.profile,
-        clock: new Date().toISOString()
+        clock: clockTime
       };
+      
+      // Log the exact inputs
+      console.log("IOB Calculation Inputs:", {
+        clock: inputs.clock,
+        historyCount: inputs.history.length,
+        history24Count: inputs.history24?.length || 0,
+        autosensRatio: inputs.autosens?.ratio || "undefined"
+      });
       
       // Add autosens data if available
       if (this.data.settings.autosens) {
         inputs.autosens = this.data.settings.autosens;
       }
-      
-      // Optional: Add 24h history if you have it separately
-      // inputs.history24 = this.data.monitor.pumphistory24;
       
       // Generate IOB using the full calculation chain
       const iobData = generate(inputs);
@@ -623,8 +664,18 @@ class InMemoryLoop {
         iobData.length > 0 ? JSON.stringify(iobData[0]) : 'No IOB data'
       );
       
-      // Add any additional fields your system needs
+      // Add detailed logging for IOB calculation
       if (iobData.length > 0) {
+        console.log("IOB Calculation Details:", {
+          iob: iobData[0].iob,
+          basaliob: iobData[0].basaliob,
+          bolusiob: iobData[0].bolusiob,
+          netbasalinsulin: iobData[0].netbasalinsulin,
+          bolusinsulin: iobData[0].bolusinsulin,
+          time_diff_minutes: Math.round((new Date() - new Date(iobData[0].time)) / 60000)
+        });
+        
+        // Add any additional fields your system needs
         // Find the most recent bolus for lastBolusTime
         const bolusEntries = this.data.monitor.pumphistory.filter(entry => 
           entry._type === 'Bolus' && entry.amount > 0
@@ -672,17 +723,17 @@ class InMemoryLoop {
           });
           const latestTempBasal = tempBasalEntries[0];
           
-          // Find corresponding duration entry
+          // Find corresponding duration entry exactly matching timestamp
           const durationEntry = this.data.monitor.pumphistory.find(entry => 
             entry._type === 'TempBasalDuration' && 
-            Math.abs((entry.date || new Date(entry.timestamp).getTime()) - 
-                    (latestTempBasal.date || new Date(latestTempBasal.timestamp).getTime())) < 10000
+            entry.timestamp === latestTempBasal.timestamp
           );
           
+          // Format exactly as original implementation expects
           lastTemp = {
             rate: latestTempBasal.rate || 0,
             timestamp: latestTempBasal.timestamp,
-            started_at: latestTempBasal.timestamp,
+            started_at: latestTempBasal.timestamp, // Make sure these match exactly
             date: latestTempBasal.date || new Date(latestTempBasal.timestamp).getTime(),
             duration: durationEntry ? (durationEntry['duration (min)'] || durationEntry.duration || 30) : 30
           };
@@ -707,16 +758,17 @@ class InMemoryLoop {
         iobData[0].timestamp = iobData[0].timestamp || now.toISOString();
         iobData[0].mills = iobData[0].mills || now.getTime();
         
-        // Ensure that all sub-objects are non-null (for safety)
-        if (!iobData[0].iobWithZeroTemp) {
+        // Ensure that iobWithZeroTemp is properly defined
+        if (!iobData[0].iobWithZeroTemp || typeof iobData[0].iobWithZeroTemp.iob === 'undefined') {
+          console.log("Recreating iobWithZeroTemp structure");
           iobData[0].iobWithZeroTemp = {
-            iob: iobData[0].iob || 0,
-            activity: iobData[0].activity || 0,
-            basaliob: iobData[0].basaliob || 0,
-            bolusiob: iobData[0].bolusiob || 0,
+            iob: iobData[0].iob,
+            activity: iobData[0].activity,
+            basaliob: iobData[0].basaliob,
+            bolusiob: iobData[0].bolusiob,
             netbasalinsulin: iobData[0].netbasalinsulin || 0,
             bolusinsulin: iobData[0].bolusinsulin || 0,
-            time: iobData[0].time || now.toISOString()
+            time: iobData[0].time
           };
         }
       }
