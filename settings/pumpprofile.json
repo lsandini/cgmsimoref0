@@ -20,7 +20,7 @@
         "endOffset": 1440,
         "offset": 0,
         "x": 0,
-        "sensitivity": 50,
+        "sensitivity": 36,
         "start": "00:00:00",
         "i": 0
       }
@@ -28,7 +28,7 @@
     "user_preferred_units": "mg/dL",
     "units": "mg/dL"
   },
-  "sens": 50,
+  "sens": 36,
   "bg_targets": {
     "first": 1,
     "targets": [
@@ -53,8 +53,8 @@
   "min_5m_carbimpact": 8,
   "maxCOB": 120,
   "max_iob": 6,
-  "max_daily_safety_multiplier": 4,
-  "current_basal_safety_multiplier": 5,
+  "max_daily_safety_multiplier": 3,
+  "current_basal_safety_multiplier": 4,
   "autosens_max": 2,
   "autosens_min": 0.5,
   "remainingCarbsCap": 90,
@@ -67,7 +67,7 @@
   "prime_indicates_pump_site_change": false,
   "rewind_indicates_cartridge_change": false,
   "battery_indicates_battery_change": false,
-  "maxSMBBasalMinutes": 75,
+  "maxSMBBasalMinutes": 30,
   "curve": "ultra-rapid",
   "useCustomPeakTime": false,
   "insulinPeakTime": 75,

@@ -1,5 +1,5 @@
 #!/bin/bash
 
 git add .
-git commit -m "add SMBs"
-git push -u origin scripts
+git commit -m "align preferences"
+git push -u origin main
