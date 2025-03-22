@@ -19,11 +19,11 @@ const DEFAULT_PROFILE = {
   insulinPeakTime: 75,
   
   // Basal settings - SINGLE VALUE, not array
-  current_basal: 1.0,
+  current_basal: 0.7,
   max_daily_basal: 1.0,
   
   // Sensitivity - SINGLE VALUE, not array
-  sens: 50,
+  sens: 36,
   
   // Carb ratio - SINGLE VALUE, not array
   carb_ratio: 10,
@@ -76,7 +76,7 @@ const DEFAULT_PROFILE = {
         endOffset: 1440,
         offset: 0,
         x: 0,
-        sensitivity: 50,
+        sensitivity: 36,
         start: "00:00:00",
         i: 0
       }
