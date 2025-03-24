@@ -1,126 +1,12 @@
 const tempBasalFunctions = require('oref0/lib/basal-set-temp');
 const determine_basal = require('oref0/lib/determine-basal/determine-basal');
 const getLastGlucose = require('oref0/lib/glucose-get-last');
-const iob = require('oref0/lib/iob');
-const getMealData = require('oref0/lib/meal/total');
 const NightscoutClient = require('./nightscout');
 const findMealInputs = require('oref0/lib/meal/history');
 const generateMeal = require('oref0/lib/meal');
 const detectSensitivity = require('oref0/lib/determine-basal/autosens');
 const { logger } = require(`./logger.js`);
-
-// Default profile settings at the top of the file for easy access and modification
-const DEFAULT_PROFILE = {
-  // Type designation
-  type: "current",
-  
-  // Insulin parameters
-  dia: 6,
-  curve: "ultra-rapid",
-  useCustomPeakTime: false,
-  insulinPeakTime: 75,
-  
-  // Basal settings - SINGLE VALUE, not array
-  current_basal: 0.7,
-  max_daily_basal: 1.0,
-  
-  // Sensitivity - SINGLE VALUE, not array
-  sens: 36,
-  
-  // Carb ratio - SINGLE VALUE, not array
-  carb_ratio: 10,
-  
-  // Target BG values - SINGLE VALUES, not arrays
-  min_bg: 100,
-  max_bg: 100,
-  
-  // Safety parameters
-  max_iob: 6,
-  max_basal: 4,
-  max_daily_safety_multiplier: 3,
-  current_basal_safety_multiplier: 4,
-  
-  // Autosens settings
-  autosens_max: 2,
-  autosens_min: 0.5,
-  
-  // SMB parameters
-  enableUAM: true,
-  enableSMB_always: true,
-  enableSMB_with_bolus: true,
-  enableSMB_with_COB: true,
-  enableSMB_with_temptarget: false,
-  enableSMB_after_carbs: true,
-  maxSMBBasalMinutes: 75,
-  maxUAMSMBBasalMinutes: 30,
-  
-  // Other parameters
-  min_5m_carbimpact: 8,
-  remainingCarbsCap: 90,
-  maxCOB: 120,
-  out_units: "mg/dL",
-  
-  // Structured profiles (exact format matters)
-  basalprofile: [
-    {
-      minutes: 0,
-      rate: 1.0,
-      start: "00:00:00",
-      i: 0
-    }
-  ],
-  
-  // ISF profile
-  isfProfile: {
-    first: 1,
-    sensitivities: [
-      {
-        endOffset: 1440,
-        offset: 0,
-        x: 0,
-        sensitivity: 36,
-        start: "00:00:00",
-        i: 0
-      }
-    ],
-    user_preferred_units: "mg/dL",
-    units: "mg/dL"
-  },
-  
-  // Carb ratios
-  carb_ratios: {
-    schedule: [
-      {
-        x: 0,
-        i: 0,
-        offset: 0,
-        ratio: 10,
-        r: 10,
-        start: "00:00:00"
-      }
-    ],
-    units: "grams"
-  },
-  
-  // BG targets
-  bg_targets: {
-    first: 1,
-    targets: [
-      {
-        max_bg: 100,
-        min_bg: 100,
-        x: 0,
-        offset: 0,
-        low: 100,
-        start: "00:00:00",
-        high: 100,
-        i: 0
-      }
-    ],
-    user_preferred_units: "mg/dL",
-    units: "mg/dL"
-  }
-};
+const DEFAULT_PROFILE = require('./default_profile.json');
 
 class InMemoryLoop {
   constructor(config) {
@@ -912,13 +798,17 @@ class InMemoryLoop {
       console.log("SMB settings check:", {
         enableSMB_always: profile.enableSMB_always,
         enableSMB_with_COB: profile.enableSMB_with_COB,
+        enableSMB_with_bolus: profile.enableSMB_with_bolus,
+        enableSMB_after_carbs: profile.enableSMB_after_carbs,
         enableUAM: profile.enableUAM
       });
 
-      // If not already set in the profile, ensure they're enabled:
-      profile.enableSMB_always = true;
-      profile.enableSMB_with_COB = true; 
-      profile.enableUAM = true;
+      // If not already set in the profile, ensure they're disabled:
+      profile.enableSMB_always = profile.enableSMB_always !== undefined ? profile.enableSMB_always : false;
+      profile.enableSMB_with_COB = profile.enableSMB_with_COB !== undefined ? profile.enableSMB_with_COB : false;
+      profile.enableSMB_with_bolus = profile.enableSMB_with_bolus !== undefined ? profile.enableSMB_with_bolus : false;
+      profile.enableSMB_after_carbs = profile.enableSMB_after_carbs !== undefined ? profile.enableSMB_after_carbs : false;
+      profile.enableUAM = profile.enableUAM !== undefined ? profile.enableUAM : false;
       
       // Call determine-basal with all required inputs
       const determineBasalResult = determine_basal(
