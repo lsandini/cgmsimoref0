@@ -495,17 +495,18 @@ class InMemoryLoop {
         const dateNum = new Date(timestamp).getTime(); // Ensure date is a number
   
         // Convert bolus treatments - match format exactly
-        if (treatment.insulin && treatment.eventType === 'Bolus') {
+        if (treatment.insulin && treatment.eventType === 'Bolus' || treatment.eventType === 'Meal Bolus'|| treatment.eventType === 'Meal Bolus'|| treatment.eventType === 'Snack Bolus'|| treatment.eventType === 'Correction Bolus' || treatment.eventType === 'SMB') {
           pumpHistory.push({
             _type: 'Bolus',
             timestamp: timestamp,
             amount: parseFloat(treatment.insulin),
-            programmed: parseFloat(treatment.insulin), // Add this field
-            unabsorbed: 0, // Add this field
-            duration: 0, // Add this field
+            programmed: parseFloat(treatment.insulin),
+            unabsorbed: 0,
+            duration: 0,
             date: dateNum
           });
         }
+      
   
         // Convert temp basals - match format exactly
         if (treatment.eventType === 'Temp Basal') {
