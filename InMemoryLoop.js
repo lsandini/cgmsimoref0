@@ -6,6 +6,8 @@ const getMealData = require('oref0/lib/meal/total');
 const NightscoutClient = require('./nightscout');
 const findMealInputs = require('oref0/lib/meal/history');
 const generateMeal = require('oref0/lib/meal');
+// Add this near the top with your other imports
+const detectSensitivity = require('oref0/lib/determine-basal/autosens');
 
 // Default profile settings at the top of the file for easy access and modification
 const DEFAULT_PROFILE = {
@@ -889,9 +891,12 @@ class InMemoryLoop {
       };
       
       // Standard autosens
-      const autosens_data = {
-        ratio: 0.78
-      };
+      // const autosens_data = {
+      //   ratio: 0.78
+      // };
+
+      const autosens_data = this.data.settings.autosens || { ratio: 1.0 };
+      console.log("Autosens data:", autosens_data);
       
       console.log(`Determine Basal Input - BG: ${bg}, IOB: ${iob_data[0].iob}, COB: ${meal_data.mealCOB}`);
 
@@ -1303,6 +1308,97 @@ class InMemoryLoop {
     };
   }
 
+  calculateAutosens() {
+    try {
+      console.log('Calculating autosensitivity...');
+      
+      // Prepare inputs similar to oref0-autosens-loop
+      const detection_inputs = {
+        iob_inputs: {
+          profile: this.data.settings.profile,
+          history: this.data.monitor.pumphistory
+        },
+        glucose_data: this.data.monitor.glucose,
+        basalprofile: this.data.settings.profile.basalprofile,
+        temptargets: [], // Add temp targets if available
+        retrospective: true,
+        deviations: 96 // Look at last 96 readings (8 hours at 5 min intervals)
+      };
+      
+      // Call detectSensitivity to calculate autosens ratio
+      const autosens_result = detectSensitivity(detection_inputs);
+      
+      // Store the result
+      this.data.settings.autosens = {
+        ratio: autosens_result.ratio,
+        newisf: autosens_result.newisf,
+        timestamp: new Date().toISOString()
+      };
+      
+      console.log('Autosens calculation complete:', {
+        ratio: autosens_result.ratio,
+        newisf: autosens_result.newisf,
+        oldisf: this.data.settings.profile.sens
+      });
+      
+      return autosens_result;
+    } catch (error) {
+      console.error('Error calculating autosensitivity:', error);
+      console.error('Error stack:', error.stack);
+      
+      // If autosens calculation fails, use a safe default
+      // Either 1.0 (no adjustment) or the previous value if available
+      const default_ratio = this.data.settings.autosens?.ratio || 1.0;
+      
+      this.data.settings.autosens = {
+        ratio: default_ratio,
+        newisf: this.data.settings.profile.sens,
+        timestamp: new Date().toISOString(),
+        error: error.toString()
+      };
+      
+      console.log('Using default autosens ratio:', default_ratio);
+      return this.data.settings.autosens;
+    }
+  }
+
+  // async runCycle() {
+  //   const cycleStartTime = new Date();
+  //   console.log('=== START OF LOOP CYCLE ===');
+  //   console.log('Cycle Start Time:', cycleStartTime.toISOString());
+    
+  //   try {
+  //     // 1. Update clock
+  //     this.data.monitor.clock = new Date().toISOString();
+      
+  //     // 2. Fetch fresh data from Nightscout
+  //     await this.fetchCGMData();
+  //     await this.fetchPumpHistory();
+      
+  //     // 3. Calculate meal data directly
+  //     this.calculateMeal();
+      
+  //     // 4. Calculate IOB directly
+  //     this.calculateIOB();
+      
+  //     // 5. Determine basal recommendations
+  //     const recommendations = this.determineBasal();
+      
+  //     // 6. Enact treatments & upload to Nightscout
+  //     await this.enactTreatments(recommendations);
+      
+  //     const cycleEndTime = new Date();
+  //     console.log('Cycle End Time:', cycleEndTime.toISOString());
+  //     console.log('Cycle Duration:', (cycleEndTime - cycleStartTime) / 1000, 'seconds');
+  //     console.log('=== END OF LOOP CYCLE ===');
+      
+  //     return recommendations;
+  //   } catch (error) {
+  //     console.error('Error in loop cycle:', error);
+  //     return null;
+  //   }
+  // }
+
   async runCycle() {
     const cycleStartTime = new Date();
     console.log('=== START OF LOOP CYCLE ===');
@@ -1322,10 +1418,13 @@ class InMemoryLoop {
       // 4. Calculate IOB directly
       this.calculateIOB();
       
-      // 5. Determine basal recommendations
+      // 5. Calculate autosensitivity - add this new step
+      this.calculateAutosens();
+      
+      // 6. Determine basal recommendations
       const recommendations = this.determineBasal();
       
-      // 6. Enact treatments & upload to Nightscout
+      // 7. Enact treatments & upload to Nightscout
       await this.enactTreatments(recommendations);
       
       const cycleEndTime = new Date();

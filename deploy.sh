@@ -1,5 +1,5 @@
 #!/bin/bash
 
 git add .
-git commit -m "correct enact zero temps"
+git commit -m "fix autosens"
 git push -u origin lt1
