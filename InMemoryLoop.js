@@ -1215,130 +1215,177 @@ class InMemoryLoop {
 //     }
 // }
 
-  async enactTreatments(recommendations) {
-    console.log('Enacting treatments...');
+async enactTreatments(recommendations) {
+  this.logger.info('Enacting treatments: %o', {
+    rate: recommendations.rate,
+    duration: recommendations.duration,
+    eventualBG: recommendations.eventualBG
+  });
+  
+  try {
+    // Ensure recommendations has valid properties
+    const safeRecommendations = {
+      ...recommendations,
+      rate: recommendations.rate !== undefined ? 
+        recommendations.rate : this.data.settings.profile.current_basal,
+      duration: recommendations.duration !== undefined ? 
+        recommendations.duration : 0,
+      eventualBG: recommendations.eventualBG || 
+        this.data.monitor.glucose[0]?.sgv || 120
+    };
     
-    try {
-      // Ensure recommendations has valid properties
-      const safeRecommendations = {
-        ...recommendations,
-        rate: recommendations.rate !== undefined ? 
-          recommendations.rate : this.data.settings.profile.current_basal,
-        duration: recommendations.duration !== undefined ? 
-          recommendations.duration : 0,
-        eventualBG: recommendations.eventualBG || 
-          this.data.monitor.glucose[0]?.sgv || 120
-      };
-      
-      // Prepare enacted data
-      const enactedData = { 
-        ...safeRecommendations, 
-        enacted: true, 
-        timestamp: new Date().toISOString(),
-        received: true
-      };
-      
-      this.data.enact.enacted = enactedData;
-      
-      // IMPORTANT: Check if we need to set a temp basal
-      // This is where we need to add explicit temp basal handling
-      if (safeRecommendations.duration > 0 || safeRecommendations.rate !== this.data.settings.profile.current_basal) {
-        // Set temp basal directly in memory
-        this.data.monitor.temp_basal = {
-          duration: safeRecommendations.duration,
-          rate: safeRecommendations.rate,
-          temp: 'absolute',
-          timestamp: new Date().toISOString()
-        };
+    // Prepare enacted data
+    const enactedData = { 
+      ...safeRecommendations, 
+      enacted: true, 
+      timestamp: new Date().toISOString(),
+      received: true
+    };
+    
+    this.data.enact.enacted = enactedData;
+    
+    // Get current timestamp for all uploads
+    const now = new Date();
+    const timestamp = now.toISOString();
+    const dateNum = now.getTime();
+    
+    // Check for SMB (microbolus)
+    if (recommendations.reason && recommendations.reason.includes('Microbolusing')) {
+      // Extract the microbolus amount from the reason string
+      const microbolusMatch = recommendations.reason.match(/Microbolusing (\d+\.?\d*)U/);
+      if (microbolusMatch && microbolusMatch[1]) {
+        const microbolusAmount = parseFloat(microbolusMatch[1]);
         
-        // Log that we're setting a temp basal
-        console.log(`Setting temp basal: ${safeRecommendations.rate}U/h for ${safeRecommendations.duration} minutes`);
+        this.logger.info('Enacting microbolus: %o', {amount: microbolusAmount + "U"});
         
-        // Also add to pump history to ensure consistency
-        const now = new Date();
-        const timestamp = now.toISOString();
-        const dateNum = now.getTime();
-        
-        // Add TempBasal entry
-        const tempBasalEntry = {
-          _type: 'TempBasal',
+        // Add bolus entry to pump history
+        const bolusEntry = {
+          _type: 'Bolus',
           timestamp: timestamp,
-          rate: safeRecommendations.rate,
-          temp: 'absolute',
+          amount: microbolusAmount,
+          programmed: microbolusAmount,
+          unabsorbed: 0,
+          duration: 0,
           date: dateNum
         };
         
-        // Add TempBasalDuration entry with specific format
-        const tempDurationEntry = {
-          _type: 'TempBasalDuration',
-          timestamp: timestamp,
-          'duration (min)': safeRecommendations.duration,
-          date: dateNum
-        };
+        // Add to pump history
+        this.data.monitor.pumphistory.unshift(bolusEntry);
         
-        // Add to pump history - prepend to keep most recent first
-        this.data.monitor.pumphistory.unshift(tempBasalEntry);
-        this.data.monitor.pumphistory.unshift(tempDurationEntry);
-        
-        // Optionally, add code here to upload the temp basal to Nightscout as a treatment
+        // Upload microbolus to Nightscout
         try {
           const nsTreatment = {
-            eventType: 'Temp Basal',
-            duration: safeRecommendations.duration,
-            rate: safeRecommendations.rate,
-            absolute: safeRecommendations.rate,
+            eventType: 'Bolus',
+            insulin: microbolusAmount,
             created_at: timestamp,
             enteredBy: 'cgmsimoref0-node',
-            reason: safeRecommendations.reason
+            notes: 'SMB from OpenAPS algorithm',
+            reason: recommendations.reason
           };
           
           await this.nightscout.uploadTreatments([nsTreatment]);
-          console.log('Uploaded temp basal treatment to Nightscout');
+          this.logger.info('Uploaded microbolus to Nightscout: %o', {amount: microbolusAmount + "U"});
         } catch (treatmentError) {
-          console.error('Error uploading temp basal treatment:', treatmentError);
+          this.logger.error('Error uploading microbolus treatment: %o', treatmentError);
         }
-      } else if (safeRecommendations.duration === 0) {
-        // Cancel any existing temp basal
-        console.log('Cancelling any existing temp basal');
-        this.data.monitor.temp_basal = {
-          duration: 0,
-          rate: 0,
-          temp: 'absolute',
-          timestamp: new Date().toISOString()
-        };
       }
-      
-      // Create and upload devicestatus
-      const deviceStatus = this.createDeviceStatus(safeRecommendations);
-      
-      console.log('=== UPLOADING DEVICE STATUSES ===');
-      console.log('Number of device statuses:', 1);
-      
-      // Extract all key fields first to make sure they exist before logging
-      const iobObj = deviceStatus.openaps.iob;
-      const basicIOBInfo = {
-        totalIOB: iobObj.iob || 0,
-        basalIOB: iobObj.basaliob || 0,
-        bolusIOB: iobObj.bolusiob || 0,
-        pumpBasalIOB: iobObj.pumpBasalIOB || 0,
-        time: iobObj.time || 'undefined'
+    }
+    
+    // IMPORTANT: Check if we need to set a temp basal
+    // This is where we need to add explicit temp basal handling
+    if (safeRecommendations.duration > 0 || safeRecommendations.rate !== this.data.settings.profile.current_basal) {
+      // Set temp basal directly in memory
+      this.data.monitor.temp_basal = {
+        duration: safeRecommendations.duration,
+        rate: safeRecommendations.rate,
+        temp: 'absolute',
+        timestamp: new Date().toISOString()
       };
       
-      // Log a safe subset of the data for debugging
-      console.log('Device Status 1:', {
-        fullIOBObject: JSON.stringify(iobObj, null, 2),
-        ...basicIOBInfo
+      // Log that we're setting a temp basal
+      this.logger.info('Setting temp basal: %o', {
+        rate: safeRecommendations.rate + "U/h",
+        duration: safeRecommendations.duration + " minutes"
       });
       
-      const uploadResponse = await this.nightscout.uploadDeviceStatus([deviceStatus]);
-      console.log('Upload Response:', uploadResponse);
+      // Also add to pump history to ensure consistency
+      // Add TempBasal entry
+      const tempBasalEntry = {
+        _type: 'TempBasal',
+        timestamp: timestamp,
+        rate: safeRecommendations.rate,
+        temp: 'absolute',
+        date: dateNum
+      };
       
-      return enactedData;
-    } catch (error) {
-      console.error('Error enacting treatments:', error);
-      return null;
+      // Add TempBasalDuration entry with specific format
+      const tempDurationEntry = {
+        _type: 'TempBasalDuration',
+        timestamp: timestamp,
+        'duration (min)': safeRecommendations.duration,
+        date: dateNum
+      };
+      
+      // Add to pump history - prepend to keep most recent first
+      this.data.monitor.pumphistory.unshift(tempBasalEntry);
+      this.data.monitor.pumphistory.unshift(tempDurationEntry);
+      
+      // Upload the temp basal to Nightscout as a treatment
+      try {
+        const nsTreatment = {
+          eventType: 'Temp Basal',
+          duration: safeRecommendations.duration,
+          rate: safeRecommendations.rate,
+          absolute: safeRecommendations.rate,
+          created_at: timestamp,
+          enteredBy: 'cgmsimoref0-node',
+          reason: safeRecommendations.reason
+        };
+        
+        await this.nightscout.uploadTreatments([nsTreatment]);
+        this.logger.info('Uploaded temp basal treatment to Nightscout');
+      } catch (treatmentError) {
+        this.logger.error('Error uploading temp basal treatment: %o', treatmentError);
+      }
+    } else if (safeRecommendations.duration === 0) {
+      // Cancel any existing temp basal
+      this.logger.info('Cancelling any existing temp basal');
+      this.data.monitor.temp_basal = {
+        duration: 0,
+        rate: 0,
+        temp: 'absolute',
+        timestamp: new Date().toISOString()
+      };
     }
+    
+    // Create and upload devicestatus
+    const deviceStatus = this.createDeviceStatus(safeRecommendations);
+    
+    this.logger.info('=== UPLOADING DEVICE STATUSES ===');
+    this.logger.info('Number of device statuses: %o', 1);
+    
+    // Extract all key fields first to make sure they exist before logging
+    const iobObj = deviceStatus.openaps.iob;
+    const basicIOBInfo = {
+      totalIOB: iobObj.iob || 0,
+      basalIOB: iobObj.basaliob || 0,
+      bolusIOB: iobObj.bolusiob || 0,
+      pumpBasalIOB: iobObj.pumpBasalIOB || 0,
+      time: iobObj.time || 'undefined'
+    };
+    
+    // Log a safe subset of the data for debugging
+    this.logger.info('Device Status: %o', basicIOBInfo);
+    
+    const uploadResponse = await this.nightscout.uploadDeviceStatus([deviceStatus]);
+    this.logger.info('Upload Response: %o', uploadResponse);
+    
+    return enactedData;
+  } catch (error) {
+    this.logger.error('Error enacting treatments: %o', error);
+    return null;
   }
+}
 
   createDeviceStatus(recommendations) {
     const now = new Date();
