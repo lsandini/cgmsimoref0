@@ -1,5 +1,5 @@
 #!/bin/bash
 
 git add .
-git commit -m "extract default profile"
+git commit -m "clean useless var from .env"
 git push -u origin lt1
