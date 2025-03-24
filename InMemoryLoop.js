@@ -1280,7 +1280,7 @@ async enactTreatments(recommendations) {
             created_at: timestamp,
             enteredBy: 'cgmsimoref0-node',
             notes: 'SMB from OpenAPS algorithm',
-            reason: recommendations.reason
+            mills: now.getTime()
           };
           
           await this.nightscout.uploadTreatments([nsTreatment]);
@@ -1332,16 +1332,6 @@ async enactTreatments(recommendations) {
       
       // Upload the temp basal to Nightscout as a treatment
       try {
-        // const nsTreatment = {
-        //   eventType: 'Temp Basal',
-        //   duration: safeRecommendations.duration,
-        //   rate: safeRecommendations.rate,
-        //   absolute: safeRecommendations.rate,
-        //   created_at: timestamp,
-        //   enteredBy: 'cgmsimoref0-node',
-        //   reason: safeRecommendations.reason
-        // };
-
         const now = new Date();
         const timestamp = now.toISOString();
         const mills = now.getTime();
