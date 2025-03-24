@@ -1216,7 +1216,7 @@ class InMemoryLoop {
 // }
 
 async enactTreatments(recommendations) {
-  this.logger.info('Enacting treatments: %o', {
+  console.log('Enacting treatments: ', {
     rate: recommendations.rate,
     duration: recommendations.duration,
     eventualBG: recommendations.eventualBG
@@ -1256,7 +1256,7 @@ async enactTreatments(recommendations) {
       if (microbolusMatch && microbolusMatch[1]) {
         const microbolusAmount = parseFloat(microbolusMatch[1]);
         
-        this.logger.info('Enacting microbolus: %o', {amount: microbolusAmount + "U"});
+        console.log('Enacting microbolus: ', {amount: microbolusAmount + "U"});
         
         // Add bolus entry to pump history
         const bolusEntry = {
@@ -1284,9 +1284,9 @@ async enactTreatments(recommendations) {
           };
           
           await this.nightscout.uploadTreatments([nsTreatment]);
-          this.logger.info('Uploaded microbolus to Nightscout: %o', {amount: microbolusAmount + "U"});
+          console.log('Uploaded microbolus to Nightscout: ', {amount: microbolusAmount + "U"});
         } catch (treatmentError) {
-          this.logger.error('Error uploading microbolus treatment: %o', treatmentError);
+          console.error('Error uploading microbolus treatment: ', treatmentError);
         }
       }
     }
@@ -1303,7 +1303,7 @@ async enactTreatments(recommendations) {
       };
       
       // Log that we're setting a temp basal
-      this.logger.info('Setting temp basal: %o', {
+      console.log('Setting temp basal: ', {
         rate: safeRecommendations.rate + "U/h",
         duration: safeRecommendations.duration + " minutes"
       });
@@ -1343,13 +1343,13 @@ async enactTreatments(recommendations) {
         };
         
         await this.nightscout.uploadTreatments([nsTreatment]);
-        this.logger.info('Uploaded temp basal treatment to Nightscout');
+        console.log('Uploaded temp basal treatment to Nightscout');
       } catch (treatmentError) {
-        this.logger.error('Error uploading temp basal treatment: %o', treatmentError);
+        console.error('Error uploading temp basal treatment: ', treatmentError);
       }
     } else if (safeRecommendations.duration === 0) {
       // Cancel any existing temp basal
-      this.logger.info('Cancelling any existing temp basal');
+      console.log('Cancelling any existing temp basal');
       this.data.monitor.temp_basal = {
         duration: 0,
         rate: 0,
@@ -1361,8 +1361,8 @@ async enactTreatments(recommendations) {
     // Create and upload devicestatus
     const deviceStatus = this.createDeviceStatus(safeRecommendations);
     
-    this.logger.info('=== UPLOADING DEVICE STATUSES ===');
-    this.logger.info('Number of device statuses: %o', 1);
+    console.log('=== UPLOADING DEVICE STATUSES ===');
+    console.log('Number of device statuses: ', 1);
     
     // Extract all key fields first to make sure they exist before logging
     const iobObj = deviceStatus.openaps.iob;
@@ -1375,14 +1375,14 @@ async enactTreatments(recommendations) {
     };
     
     // Log a safe subset of the data for debugging
-    this.logger.info('Device Status: %o', basicIOBInfo);
+    console.log('Device Status: ', basicIOBInfo);
     
     const uploadResponse = await this.nightscout.uploadDeviceStatus([deviceStatus]);
-    this.logger.info('Upload Response: %o', uploadResponse);
+    console.log('Upload Response: ', uploadResponse);
     
     return enactedData;
   } catch (error) {
-    this.logger.error('Error enacting treatments: %o', error);
+    console.error('Error enacting treatments: ', error);
     return null;
   }
 }
