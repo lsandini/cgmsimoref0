@@ -6,8 +6,8 @@ const getMealData = require('oref0/lib/meal/total');
 const NightscoutClient = require('./nightscout');
 const findMealInputs = require('oref0/lib/meal/history');
 const generateMeal = require('oref0/lib/meal');
-// Add this near the top with your other imports
 const detectSensitivity = require('oref0/lib/determine-basal/autosens');
+const { logger } = require(`./logger.js`);
 
 // Default profile settings at the top of the file for easy access and modification
 const DEFAULT_PROFILE = {
@@ -127,6 +127,7 @@ class InMemoryLoop {
     this.config = config;
     this.nightscout = new NightscoutClient(config.nightscout);
     this.running = false;
+    this.logger = logger.child({ component: 'InMemoryLoop' });
     
     // Use default profile settings (can be overridden from config)
     this.profileSettings = {
@@ -193,8 +194,7 @@ class InMemoryLoop {
       console.error('Error initializing loop:', error);
       return false;
     }
-  }
-  
+  }  
 
   // Extract and map Nightscout profile to oref0 profile format
   updateProfileFromNightscout(nsProfile) {
@@ -1022,6 +1022,199 @@ class InMemoryLoop {
     }
   }
 
+//   determineBasal() {
+//     try {
+//       // Get glucose status (delta, etc.)
+//       const glucose_status = getLastGlucose(this.data.monitor.glucose);
+      
+//       // Get the current glucose reading
+//       const current_glucose = this.data.monitor.glucose[0] || { sgv: 120 };
+//       const bg = current_glucose.sgv;
+      
+//       this.logger.info('Current BG: %o', { bg, units: 'mg/dl' });
+      
+//       // Use the complete profile structure from our settings
+//       // No need to rebuild - use the structure directly
+//       const profile = this.data.settings.profile;
+      
+//       // Log key settings for debugging
+//       this.logger.info('Glucose status: %o', glucose_status);
+//       this.logger.info('IOB data: %o', this.data.monitor.iob[0]);
+//       this.logger.info('Profile key settings: %o', {
+//         dia: profile.dia,
+//         curve: profile.curve,
+//         insulinPeakTime: profile.insulinPeakTime,
+//         useCustomPeakTime: profile.useCustomPeakTime,
+//         current_basal: profile.current_basal,
+//         sens: profile.sens,
+//         has_basal_profile: Array.isArray(profile.basalprofile)
+//       });
+      
+//       // Current temporary basal
+//       const temp = {
+//         duration: this.data.monitor.temp_basal.duration || 0,
+//         rate: this.data.monitor.temp_basal.rate || 0,
+//         temp: "absolute"
+//       };
+      
+//       // IOB data as an array (required format)
+//       const iob_data = this.data.monitor.iob.length > 0 ? 
+//         this.data.monitor.iob : 
+//         [{ iob: 0, activity: 0, basaliob: 0, bolusiob: 0 }];
+      
+//       // Meal data
+//       const meal_data = this.data.monitor.meal || {
+//         carbs: 0,
+//         mealCOB: 0,
+//         currentDeviation: 0,
+//         maxDeviation: 0,
+//         minDeviation: 0
+//       };
+      
+//       // Standard autosens
+//       const autosens_data = this.data.settings.autosens || { ratio: 1.0 };
+//       this.logger.info("Autosens data: %o", autosens_data);
+      
+//       this.logger.info('Determine Basal Input: %o', {
+//         bg,
+//         iob: iob_data[0].iob,
+//         cob: meal_data.mealCOB
+//       });
+  
+//       this.logger.info("Pre-determine_basal - Effective ISF: %o", {
+//         profileSens: profile.sens,
+//         firstSensitivity: profile.isfProfile.sensitivities[0].sensitivity,
+//         autosensRatio: autosens_data.ratio,
+//         effectiveISF: profile.sens * autosens_data.ratio
+//       });
+  
+//       // Ensure SMB settings are properly set before calling determine_basal
+//       this.logger.info("SMB settings check: %o", {
+//         enableSMB_always: profile.enableSMB_always,
+//         enableSMB_with_COB: profile.enableSMB_with_COB,
+//         enableUAM: profile.enableUAM
+//       });
+  
+//       // If not already set in the profile, ensure they're enabled:
+//       profile.enableSMB_always = true;
+//       profile.enableSMB_with_COB = true; 
+//       profile.enableUAM = true;
+      
+//       // Call determine-basal with all required inputs
+//       let determineBasalResult;
+//       try {
+//         determineBasalResult = determine_basal(
+//           glucose_status,
+//           temp,
+//           iob_data,
+//           profile,
+//           autosens_data,
+//           meal_data,
+//           tempBasalFunctions,
+//           true
+//         );
+//       } catch (basal_error) {
+//         this.logger.error("Error in determine_basal call: %o", basal_error);
+//         return this.getDefaultRecommendation();
+//       }
+  
+//       // Check if determineBasalResult exists before trying to access properties
+//       if (!determineBasalResult) {
+//         this.logger.error("determine-basal returned null");
+//         return this.getDefaultRecommendation();
+//       }
+  
+//       // Safely log ISF information - only if it exists
+//       if (determineBasalResult.ISF !== undefined) {
+//         this.logger.info("Raw determine_basal result ISF: %o", {
+//           isfInResult: determineBasalResult.ISF,
+//           typeOfISF: typeof determineBasalResult.ISF,
+//           valueInMgDl: determineBasalResult.ISF
+//         });
+//       } else {
+//         this.logger.info("determineBasalResult does not contain ISF");
+//       }
+  
+//       // Safely handle mmol/L conversion
+//       if (profile.out_units === "mmol/L" && determineBasalResult.ISF !== undefined) {
+//         // Store the original ISF value before it gets converted to a string
+//         determineBasalResult.ISF_mgdl = determineBasalResult.ISF ? 
+//           (parseFloat(determineBasalResult.ISF) * 18).toFixed(1) : null;
+        
+//         this.logger.info("Preserving ISF in mg/dL: %o", {
+//           displayISF: determineBasalResult.ISF,
+//           internalISF_mgdl: determineBasalResult.ISF_mgdl
+//         });
+//       }
+      
+//       // Add missing fields when "doing nothing"
+//       if (determineBasalResult.rate === undefined) {
+//         determineBasalResult.rate = profile.current_basal; // Use current basal
+//       }
+      
+//       if (determineBasalResult.duration === undefined) {
+//         determineBasalResult.duration = 0; // No temp basal duration
+//       }
+      
+//       determineBasalResult.deliverAt = determineBasalResult.deliverAt || new Date();
+      
+//       // Make sure eventualBG is set (this affects prediction data)
+//       if (determineBasalResult.eventualBG === undefined) {
+//         // Extract eventualBG from the reason string if possible
+//         const reason = determineBasalResult.reason || '';
+//         const eventualBGMatch = reason.match(/eventualBG (\d+)/);
+//         if (eventualBGMatch && eventualBGMatch[1]) {
+//           determineBasalResult.eventualBG = parseInt(eventualBGMatch[1]);
+//         } else {
+//           // Default to current BG if we can't extract it
+//           determineBasalResult.eventualBG = glucose_status.glucose;
+//         }
+//       }
+      
+//       this.logger.info('Determine Basal Result: %o', {
+//         rate: determineBasalResult.rate,
+//         duration: determineBasalResult.duration,
+//         reason: determineBasalResult.reason || 'No reason provided',
+//         eventualBG: determineBasalResult.eventualBG
+//       });
+  
+//       // Safely log prediction data
+//       if (determineBasalResult.predBGs) {
+//         this.logger.info("Predictions from determine_basal: %o", determineBasalResult.predBGs);
+//         this.logger.info("Keys in predBGs: %o", Object.keys(determineBasalResult.predBGs));
+        
+//         // If we have IOB predictions, log the first and last values
+//         if (determineBasalResult.predBGs.IOB && determineBasalResult.predBGs.IOB.length > 0) {
+//           this.logger.info("IOB predictions length: %o", determineBasalResult.predBGs.IOB.length);
+//           this.logger.info("IOB predictions first: %o", determineBasalResult.predBGs.IOB[0]);
+//           this.logger.info("IOB predictions last: %o", 
+//             determineBasalResult.predBGs.IOB[determineBasalResult.predBGs.IOB.length-1]);
+//         }
+        
+//         // If we have ZT predictions, log the first and last values
+//         if (determineBasalResult.predBGs.ZT && determineBasalResult.predBGs.ZT.length > 0) {
+//           this.logger.info("ZT predictions length: %o", determineBasalResult.predBGs.ZT.length);
+//           this.logger.info("ZT predictions first: %o", determineBasalResult.predBGs.ZT[0]);
+//           this.logger.info("ZT predictions last: %o", 
+//             determineBasalResult.predBGs.ZT[determineBasalResult.predBGs.ZT.length-1]);
+//         }
+//       } else {
+//         this.logger.info("No prediction data available from determine_basal");
+//       }
+      
+//       // Save the suggestion
+//       this.data.enact.suggested = determineBasalResult;
+      
+//       return determineBasalResult;
+//     } catch (error) {
+//       this.logger.error('Error determining basal: %o', { 
+//         err: error, 
+//         stack: error.stack || String(error) 
+//       });
+//       return this.getDefaultRecommendation();
+//     }
+// }
+
   async enactTreatments(recommendations) {
     console.log('Enacting treatments...');
     
@@ -1361,43 +1554,6 @@ class InMemoryLoop {
       return this.data.settings.autosens;
     }
   }
-
-  // async runCycle() {
-  //   const cycleStartTime = new Date();
-  //   console.log('=== START OF LOOP CYCLE ===');
-  //   console.log('Cycle Start Time:', cycleStartTime.toISOString());
-    
-  //   try {
-  //     // 1. Update clock
-  //     this.data.monitor.clock = new Date().toISOString();
-      
-  //     // 2. Fetch fresh data from Nightscout
-  //     await this.fetchCGMData();
-  //     await this.fetchPumpHistory();
-      
-  //     // 3. Calculate meal data directly
-  //     this.calculateMeal();
-      
-  //     // 4. Calculate IOB directly
-  //     this.calculateIOB();
-      
-  //     // 5. Determine basal recommendations
-  //     const recommendations = this.determineBasal();
-      
-  //     // 6. Enact treatments & upload to Nightscout
-  //     await this.enactTreatments(recommendations);
-      
-  //     const cycleEndTime = new Date();
-  //     console.log('Cycle End Time:', cycleEndTime.toISOString());
-  //     console.log('Cycle Duration:', (cycleEndTime - cycleStartTime) / 1000, 'seconds');
-  //     console.log('=== END OF LOOP CYCLE ===');
-      
-  //     return recommendations;
-  //   } catch (error) {
-  //     console.error('Error in loop cycle:', error);
-  //     return null;
-  //   }
-  // }
 
   async runCycle() {
     const cycleStartTime = new Date();
