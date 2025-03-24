@@ -1,5 +1,5 @@
 #!/bin/bash
 
 git add .
-git commit -m "restructure for cron"
+git commit -m "simplify uploaded temp basals"
 git push -u origin lt1

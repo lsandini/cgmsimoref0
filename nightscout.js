@@ -13,7 +13,7 @@ class NightscoutClient {
     });
   }
 
-  async getEntries(count = 288) { // 24 hours of 5-min CGM data
+  async getEntries(count = 144) { // 24 hours of 5-min CGM data
     try {
       const response = await this.client.get(`/api/v1/entries.json?count=${count}`);
       return response.data;
