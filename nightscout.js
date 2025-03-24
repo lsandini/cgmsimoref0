@@ -23,7 +23,7 @@ class NightscoutClient {
     }
   }
 
-  async getTreatments(count = 100) {
+  async getTreatments(count = 288) {
     try {
       const response = await this.client.get(`/api/v1/treatments.json?count=${count}`);
       return response.data;
