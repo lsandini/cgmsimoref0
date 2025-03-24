@@ -1567,7 +1567,8 @@ async enactTreatments(recommendations) {
         basalprofile: this.data.settings.profile.basalprofile,
         temptargets: [], // Add temp targets if available
         retrospective: true,
-        deviations: 96 // Look at last 96 readings (8 hours at 5 min intervals)
+        deviations: 96, // Look at last 96 readings (8 hours at 5 min intervals)
+        carbs: this.data.monitor.carbHistory || [] // Add this line
       };
       
       // Call detectSensitivity to calculate autosens ratio

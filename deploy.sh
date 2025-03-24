@@ -1,5 +1,5 @@
 #!/bin/bash
 
 git add .
-git commit -m "fix undetected manual Boluses"
+git commit -m "fix autosens missing carbs"
 git push -u origin lt1
