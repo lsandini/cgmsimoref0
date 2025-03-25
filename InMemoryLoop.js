@@ -6,7 +6,6 @@ const findMealInputs = require('oref0/lib/meal/history');
 const generateMeal = require('oref0/lib/meal');
 const detectSensitivity = require('oref0/lib/determine-basal/autosens');
 const { logger } = require(`./logger.js`);
-const DEFAULT_PROFILE = require('./default_profile.json');
 
 class InMemoryLoop {
   constructor(config) {
@@ -15,26 +14,100 @@ class InMemoryLoop {
     this.running = false;
     this.logger = logger.child({ component: 'InMemoryLoop' });
     
-    // Use default profile settings (can be overridden from config)
-    this.profileSettings = {
-      ...DEFAULT_PROFILE,
-      ...(config.profile || {})
+    // Load default preferences separately (can be overridden from config)
+    this.preferences = {
+      ...require('./preferences.json'),
+      ...(config.preferences || {})
+    };
+
+    // Define hardcoded DEFAULT profile values
+    const defaultProfileValues = {
+      // Core settings
+      dia: 6,
+      insulinPeakTime: 75,
+      current_basal: 0.7,
+      max_daily_basal: 1.0,
+      sens: 36,
+      carb_ratio: 10,
+      min_bg: 100,
+      max_bg: 100,
+      max_basal: 4,
+      out_units: "mg/dL"
     };
     
     // In-memory data store (replaces all file I/O)
     this.data = {
       settings: {
         profile: {
-          // Core settings with defaults (will be overridden by Nightscout profile)
-          ...this.profileSettings,
+          // Core settings with hardcoded defaults (will be overridden by Nightscout profile)
+          ...defaultProfileValues,
+          // Add preferences to profile for compatibility with oref0
+          ...this.preferences,
           // Required by oref0
           type: "current",
-          // Will be populated from Nightscout profile
+          
+          // Default basalprofile
+          basalprofile: [
+            {
+              i: 0,
+              start: "00:00:00",
+              minutes: 0,
+              rate: defaultProfileValues.current_basal
+            }
+          ],
+          
+          // Default isfProfile
           isfProfile: {
-            sensitivities: [{ offset: 0, sensitivity: this.profileSettings.sens }]
+            first: 1,
+            sensitivities: [
+              {
+                endOffset: 1440,
+                offset: 0,
+                x: 0,
+                sensitivity: defaultProfileValues.sens,
+                start: "00:00:00",
+                i: 0
+              }
+            ],
+            user_preferred_units: "mg/dL",
+            units: "mg/dL"
+          },
+          
+          // Default carb_ratios
+          carb_ratios: {
+            schedule: [
+              {
+                x: 0,
+                i: 0,
+                offset: 0,
+                ratio: defaultProfileValues.carb_ratio,
+                r: defaultProfileValues.carb_ratio,
+                start: "00:00:00"
+              }
+            ],
+            units: "grams"
+          },
+          
+          // Default bg_targets
+          bg_targets: {
+            first: 1,
+            targets: [
+              {
+                max_bg: defaultProfileValues.max_bg,
+                min_bg: defaultProfileValues.min_bg,
+                x: 0,
+                offset: 0,
+                low: defaultProfileValues.min_bg,
+                start: "00:00:00",
+                high: defaultProfileValues.max_bg,
+                i: 0
+              }
+            ],
+            user_preferred_units: "mg/dL",
+            units: "mg/dL"
           }
         },
-        basal_profile: [{ minutes: 0, rate: this.profileSettings.current_basal }],
+        basal_profile: [{ minutes: 0, rate: defaultProfileValues.current_basal }],
         autosens: { ratio: 0.78 }
       },
       monitor: {
@@ -66,9 +139,17 @@ class InMemoryLoop {
     console.log('Initializing in-memory loop...');
     
     try {
-      // Fetch profile from Nightscout
-      const nsProfile = await this.nightscout.getProfile();
-      this.updateProfileFromNightscout(nsProfile);
+      // Fetch profile from Nightscout first
+      console.log('Fetching initial profile from Nightscout...');
+      const nsProfile = await this.fetchProfile();
+      
+      if (!nsProfile) {
+        console.warn('Could not retrieve profile from Nightscout. Using hardcoded defaults.');
+        // We're already using hardcoded defaults initialized in the constructor
+        // No additional action needed here as the defaults are already set
+      } else {
+        console.log('Successfully initialized with Nightscout profile.');
+      }
       
       // Initialize with data from Nightscout
       await this.fetchCGMData();
@@ -78,11 +159,12 @@ class InMemoryLoop {
       return true;
     } catch (error) {
       console.error('Error initializing loop:', error);
+      console.error('Stack trace:', error.stack);
+      console.warn('Continuing with hardcoded default values');
       return false;
     }
-  }  
+  }
 
-  // Extract and map Nightscout profile to oref0 profile format
   updateProfileFromNightscout(nsProfile) {
     if (!nsProfile || !nsProfile.store) {
       console.warn('Invalid or missing Nightscout profile');
@@ -90,14 +172,24 @@ class InMemoryLoop {
     }
     
     try {
-      // Get first profile from store
-      const profileName = Object.keys(nsProfile.store)[0];
+      // Get first profile from store or use defaultProfile
+      const profileName = nsProfile.defaultProfile || Object.keys(nsProfile.store)[0];
       const profile = nsProfile.store[profileName];
       
       if (!profile) {
         console.error("No profile found in Nightscout profile store");
         return;
       }
+      
+      // Define fallback values directly in this method
+      const fallbacks = {
+        dia: 6,
+        current_basal: 0.7,
+        sens: 36,
+        carb_ratio: 10,
+        min_bg: 100,
+        max_bg: 100
+      };
       
       // Extract values from the profile arrays
       let dia = profile.dia;
@@ -125,7 +217,7 @@ class InMemoryLoop {
       }
 
       // Set the ISF directly - don't convert again later
-      this.data.settings.profile.sens = sens;
+      this.data.settings.profile.sens = sens || fallbacks.sens;
       
       // Extract carb ratio
       let carb_ratio = null;
@@ -149,18 +241,22 @@ class InMemoryLoop {
         if (max_bg) max_bg = max_bg * 18; // Convert max_bg from mmol/L to mg/dL
       }
       
-      // Update profile with extracted values
-      this.data.settings.profile.dia = Number(dia || this.profileSettings.dia);
-      this.data.settings.profile.current_basal = Number(current_basal || this.profileSettings.current_basal);
+      // Update profile with extracted values using fallbacks if needed
+      this.data.settings.profile.dia = Number(dia || fallbacks.dia);
+      this.data.settings.profile.current_basal = Number(current_basal || fallbacks.current_basal);
       this.data.settings.profile.isfProfile.sensitivities.forEach(entry => {
-        entry.sensitivity = sens; // Use the converted value for all sensitivity entries
+        entry.sensitivity = sens || fallbacks.sens; // Use the converted value for all sensitivity entries
       });
-      this.data.settings.profile.carb_ratio = Number(carb_ratio || this.profileSettings.carb_ratio);
+      this.data.settings.profile.carb_ratio = Number(carb_ratio || fallbacks.carb_ratio);
       
       // Set min_bg and max_bg
       if (min_bg !== null && max_bg !== null) {
         this.data.settings.profile.min_bg = Number(min_bg);
         this.data.settings.profile.max_bg = Number(max_bg);
+      } else {
+        // Use fallbacks if needed
+        this.data.settings.profile.min_bg = fallbacks.min_bg;
+        this.data.settings.profile.max_bg = fallbacks.max_bg;
       }
       
       // Force internal calculations to display in mg/dL
@@ -201,7 +297,7 @@ class InMemoryLoop {
       if (Array.isArray(profile.sens)) {
         profile.sens.forEach((entry, index) => {
           // Already converted above, use directly
-          const sensitivity = sens;
+          const sensitivity = sens || fallbacks.sens;
           
           this.data.settings.profile.isfProfile.sensitivities.push({
             i: index,
@@ -337,6 +433,7 @@ class InMemoryLoop {
       console.log('- ISF extracted from profile:', this.data.settings.profile.sens, 'mg/dL per U');
     } catch (error) {
       console.error('Error updating profile from Nightscout:', error);
+      console.error('Stack trace:', error.stack);
     }
   }
 
@@ -438,6 +535,79 @@ class InMemoryLoop {
     } catch (error) {
       console.error('Error fetching pump history:', error);
       return [];
+    }
+  }
+
+  async fetchProfile() {
+    try {
+      console.log('=== FETCHING PROFILE FROM NIGHTSCOUT ===');
+      
+      // Get profile from Nightscout
+      const nsProfile = await this.nightscout.getProfile();
+      
+      // Detailed logging to examine the returned structure
+      console.log('FULL PROFILE RESPONSE:', nsProfile);
+      
+      if (!nsProfile || !nsProfile.store) {
+        console.warn('Invalid or missing Nightscout profile, using defaults');
+        return null;
+      }
+      
+      // Log the top-level structure
+      console.log('TOP LEVEL PROFILE KEYS:', Object.keys(nsProfile));
+      console.log('STORE KEYS:', Object.keys(nsProfile.store));
+      
+      // Get first profile from store
+      const profileName = Object.keys(nsProfile.store)[0];
+      const profile = nsProfile.store[profileName];
+      
+      if (!profile) {
+        console.error("No profile found in Nightscout profile store");
+        return null;
+      }
+      
+      // Log the specific profile content with detailed info about each component
+      console.log('=== DETAILED PROFILE CONTENT ===');
+      console.log('PROFILE KEYS:', Object.keys(profile));
+      
+      // Log each important component separately for clarity
+      if (profile.dia) console.log('DIA:', profile.dia);
+      if (profile.carbratio) {
+        console.log('CARB RATIO:', profile.carbratio);
+        console.log('CARB RATIO TYPE:', typeof profile.carbratio);
+        console.log('CARB RATIO SAMPLE:', profile.carbratio[0]);
+      }
+      if (profile.sens) {
+        console.log('SENSITIVITY FACTOR:', profile.sens);
+        console.log('SENSITIVITY SAMPLE:', profile.sens[0]);
+      }
+      if (profile.basal) {
+        console.log('BASAL PROFILE:', profile.basal);
+        console.log('BASAL SAMPLE:', profile.basal[0]);
+      }
+      if (profile.target_low) {
+        console.log('TARGET LOW:', profile.target_low);
+        console.log('TARGET LOW SAMPLE:', profile.target_low[0]);
+      }
+      if (profile.target_high) {
+        console.log('TARGET HIGH:', profile.target_high);
+        console.log('TARGET HIGH SAMPLE:', profile.target_high[0]);
+      }
+      console.log('UNITS:', profile.units);
+      
+      // Log the stringified full profile for complete reference
+      console.log('FULL PROFILE JSON:');
+      console.log(JSON.stringify(profile, null, 2));
+      
+      // Update our profile with the fetched data
+      this.updateProfileFromNightscout(nsProfile);
+      console.log('=== PROFILE FETCH COMPLETE ===');
+      
+      return nsProfile;
+    } catch (error) {
+      console.error('Error fetching profile from Nightscout:', error);
+      console.error('Error stack:', error.stack);
+      return null;
     }
   }
 
@@ -717,22 +887,66 @@ class InMemoryLoop {
     }
   }
 
-  // Helper method to create default recommendation
   getDefaultRecommendation() {
+    // Hardcoded fallback values
+    const fallbackBasalRate = 0.7;
+    const fallbackBG = 120;
+    
+    // Get current basal rate from profile if available
+    const current_basal = this.data.settings.profile?.current_basal || fallbackBasalRate;
+    
+    // Get current BG if available
+    const current_bg = this.data.monitor.glucose && this.data.monitor.glucose.length > 0 
+      ? this.data.monitor.glucose[0].sgv 
+      : fallbackBG;
+    
+    // Log the usage of fallback values
+    if (current_basal === fallbackBasalRate) {
+      console.warn('FALLBACK ALERT: Using fallback basal rate of', fallbackBasalRate, 'U/h');
+    }
+    
+    if (current_bg === fallbackBG) {
+      console.warn('FALLBACK ALERT: Using fallback BG value of', fallbackBG, 'mg/dL');
+    }
+    
+    console.warn('ALERT: Using default recommendation due to algorithm error');
+    
     return {
       reason: "Error in determine-basal algorithm. Using safe defaults.",
-      rate: this.data.settings.profile.current_basal,
+      rate: current_basal,
       duration: 0,
       temp: "absolute",
       deliverAt: new Date(),
-      eventualBG: this.data.monitor.glucose[0]?.sgv || 120
+      eventualBG: current_bg
     };
   }
 
   determineBasal() {
     try {
+      // Define fallback values for essential profile properties
+      const fallbacks = {
+        dia: 6,
+        current_basal: 0.7,
+        sens: 36,
+        carb_ratio: 10,
+        min_bg: 100,
+        max_bg: 100,
+        max_iob: 3,
+        curve: 'ultra-rapid',
+        insulinPeakTime: 75,
+        useCustomPeakTime: false
+      };
+      
       // Get glucose status (delta, etc.)
       const glucose_status = getLastGlucose(this.data.monitor.glucose);
+      
+      // Add fallback for missing glucose data
+      if (!glucose_status || !glucose_status.glucose) {
+        console.warn('Missing or invalid glucose data, using default value of 120 mg/dL');
+        glucose_status.glucose = 120;
+        glucose_status.delta = 0;
+        glucose_status.avgdelta = 0;
+      }
       
       // Get the current glucose reading
       const current_glucose = this.data.monitor.glucose[0] || { sgv: 120 };
@@ -742,7 +956,54 @@ class InMemoryLoop {
       
       // Use the complete profile structure from our settings
       // No need to rebuild - use the structure directly
-      const profile = this.data.settings.profile;
+      let profile = this.data.settings.profile;
+      
+      // Validate essential profile properties and use fallbacks if needed
+      profile.dia = profile.dia || fallbacks.dia;
+      profile.current_basal = profile.current_basal || fallbacks.current_basal;
+      profile.sens = profile.sens || fallbacks.sens;
+      profile.carb_ratio = profile.carb_ratio || fallbacks.carb_ratio;
+      profile.min_bg = profile.min_bg || fallbacks.min_bg;
+      profile.max_bg = profile.max_bg || fallbacks.max_bg;
+      profile.max_iob = profile.max_iob || fallbacks.max_iob;
+      profile.curve = profile.curve || fallbacks.curve;
+      profile.insulinPeakTime = profile.insulinPeakTime || fallbacks.insulinPeakTime;
+      profile.useCustomPeakTime = profile.useCustomPeakTime !== undefined ? 
+        profile.useCustomPeakTime : fallbacks.useCustomPeakTime;
+      
+      // Ensure complex structures exist
+      if (!profile.basalprofile || !Array.isArray(profile.basalprofile) || profile.basalprofile.length === 0) {
+        console.warn('Missing or empty basalprofile, creating default');
+        profile.basalprofile = [
+          {
+            i: 0,
+            start: "00:00:00",
+            minutes: 0,
+            rate: profile.current_basal
+          }
+        ];
+      }
+      
+      if (!profile.isfProfile || !profile.isfProfile.sensitivities || 
+          !Array.isArray(profile.isfProfile.sensitivities) || 
+          profile.isfProfile.sensitivities.length === 0) {
+        console.warn('Missing or invalid isfProfile, creating default');
+        profile.isfProfile = {
+          first: 1,
+          units: "mg/dL",
+          user_preferred_units: "mg/dL",
+          sensitivities: [
+            {
+              i: 0,
+              x: 0,
+              sensitivity: profile.sens,
+              offset: 0,
+              start: "00:00:00",
+              endOffset: 1440
+            }
+          ]
+        };
+      }
       
       // Log key settings for debugging
       console.log('$$$ Glucose status:', JSON.stringify(glucose_status, null, 2));
@@ -778,37 +1039,42 @@ class InMemoryLoop {
       };
       
       // Standard autosens
-      // const autosens_data = {
-      //   ratio: 0.78
-      // };
-
       const autosens_data = this.data.settings.autosens || { ratio: 1.0 };
       console.log("Autosens data:", autosens_data);
       
       console.log(`Determine Basal Input - BG: ${bg}, IOB: ${iob_data[0].iob}, COB: ${meal_data.mealCOB}`);
-
+  
       console.log("Pre-determine_basal - Effective ISF:", {
         profileSens: profile.sens,
         firstSensitivity: profile.isfProfile.sensitivities[0].sensitivity,
         autosensRatio: autosens_data.ratio,
         effectiveISF: profile.sens * autosens_data.ratio
       });
-
-      // Ensure SMB settings are properly set before calling determine_basal
+  
+      // Ensure SMB settings are properly set from preferences before calling determine_basal
       console.log("SMB settings check:", {
-        enableSMB_always: profile.enableSMB_always,
-        enableSMB_with_COB: profile.enableSMB_with_COB,
-        enableSMB_with_bolus: profile.enableSMB_with_bolus,
-        enableSMB_after_carbs: profile.enableSMB_after_carbs,
-        enableUAM: profile.enableUAM
+        enableSMB_always: this.preferences.enableSMB_always,
+        enableSMB_with_COB: this.preferences.enableSMB_with_COB,
+        enableSMB_with_bolus: this.preferences.enableSMB_with_bolus,
+        enableSMB_after_carbs: this.preferences.enableSMB_after_carbs,
+        enableUAM: this.preferences.enableUAM
       });
-
-      // If not already set in the profile, ensure they're disabled:
-      profile.enableSMB_always = profile.enableSMB_always !== undefined ? profile.enableSMB_always : false;
-      profile.enableSMB_with_COB = profile.enableSMB_with_COB !== undefined ? profile.enableSMB_with_COB : false;
-      profile.enableSMB_with_bolus = profile.enableSMB_with_bolus !== undefined ? profile.enableSMB_with_bolus : false;
-      profile.enableSMB_after_carbs = profile.enableSMB_after_carbs !== undefined ? profile.enableSMB_after_carbs : false;
-      profile.enableUAM = profile.enableUAM !== undefined ? profile.enableUAM : false;
+  
+      // Set all SMB settings explicitly from preferences with fallbacks for undefined values
+      profile.enableSMB_always = this.preferences.enableSMB_always !== undefined ? 
+        this.preferences.enableSMB_always : false;
+      profile.enableSMB_with_COB = this.preferences.enableSMB_with_COB !== undefined ? 
+        this.preferences.enableSMB_with_COB : false;
+      profile.enableSMB_with_bolus = this.preferences.enableSMB_with_bolus !== undefined ? 
+        this.preferences.enableSMB_with_bolus : false;
+      profile.enableSMB_with_temptarget = this.preferences.enableSMB_with_temptarget !== undefined ? 
+        this.preferences.enableSMB_with_temptarget : false;
+      profile.enableSMB_after_carbs = this.preferences.enableSMB_after_carbs !== undefined ? 
+        this.preferences.enableSMB_after_carbs : false;
+      profile.enableUAM = this.preferences.enableUAM !== undefined ? 
+        this.preferences.enableUAM : false;
+      profile.maxSMBBasalMinutes = this.preferences.maxSMBBasalMinutes || 30;
+      profile.maxUAMSMBBasalMinutes = this.preferences.maxUAMSMBBasalMinutes || 30;
       
       // Call determine-basal with all required inputs
       const determineBasalResult = determine_basal(
@@ -821,13 +1087,19 @@ class InMemoryLoop {
         tempBasalFunctions,
         true
       );
-
+  
+      // Handle case where determine_basal returns null or undefined
+      if (!determineBasalResult) {
+        console.error("determine-basal returned null or undefined");
+        return this.getDefaultRecommendation();
+      }
+  
       console.log("Raw determine_basal result ISF:", {
         isfInResult: determineBasalResult.ISF,
         typeOfISF: typeof determineBasalResult.ISF,
         valueInMgDl: determineBasalResult.ISF
       });
-
+  
       if (determineBasalResult && profile.out_units === "mmol/L") {
         // Store the original ISF value before it gets converted to a string
         determineBasalResult.ISF_mgdl = determineBasalResult.ISF ? 
@@ -837,12 +1109,6 @@ class InMemoryLoop {
           displayISF: determineBasalResult.ISF,
           internalISF_mgdl: determineBasalResult.ISF_mgdl
         });
-      }
-      
-      // Ensure we have required fields
-      if (!determineBasalResult) {
-        console.error("determine-basal returned null");
-        return this.getDefaultRecommendation();
       }
       
       // Add missing fields when "doing nothing"
@@ -859,7 +1125,8 @@ class InMemoryLoop {
       // Make sure eventualBG is set (this affects prediction data)
       if (determineBasalResult.eventualBG === undefined) {
         // Extract eventualBG from the reason string if possible
-        const eventualBGMatch = determineBasalResult.reason.match(/eventualBG (\d+)/);
+        const reasonStr = determineBasalResult.reason || '';
+        const eventualBGMatch = reasonStr.match(/eventualBG (\d+)/);
         if (eventualBGMatch && eventualBGMatch[1]) {
           determineBasalResult.eventualBG = parseInt(eventualBGMatch[1]);
         } else {
@@ -871,37 +1138,32 @@ class InMemoryLoop {
       console.log('Determine Basal Result:', {
         rate: determineBasalResult.rate,
         duration: determineBasalResult.duration,
-        reason: determineBasalResult.reason,
+        reason: determineBasalResult.reason || 'No reason provided',
         eventualBG: determineBasalResult.eventualBG
       });
-
-          
-    // Log prediction data to see what's being returned
-    console.log("Predictions from determine_basal:", determineBasalResult.predBGs);
-    console.log("Keys in predBGs:", determineBasalResult.predBGs ? Object.keys(determineBasalResult.predBGs) : "none");
-    
-    if (determineBasalResult.predBGs) {
-      // If we have IOB predictions, log the first and last values
-      if (determineBasalResult.predBGs.IOB) {
-        console.log("IOB predictions length:", determineBasalResult.predBGs.IOB.length);
-        console.log("IOB predictions first:", determineBasalResult.predBGs.IOB[0]);
-        console.log("IOB predictions last:", determineBasalResult.predBGs.IOB[determineBasalResult.predBGs.IOB.length-1]);
-      }
+  
+      // Log prediction data
+      console.log("Predictions from determine_basal:", 
+        determineBasalResult.predBGs ? 
+        Object.keys(determineBasalResult.predBGs).join(', ') : 
+        "none"
+      );
       
-      // If we have ZT predictions, log the first and last values
-      if (determineBasalResult.predBGs.ZT) {
-        console.log("ZT predictions length:", determineBasalResult.predBGs.ZT.length);
-        console.log("ZT predictions first:", determineBasalResult.predBGs.ZT[0]);
-        console.log("ZT predictions last:", determineBasalResult.predBGs.ZT[determineBasalResult.predBGs.ZT.length-1]);
+      if (determineBasalResult.predBGs) {
+        // If we have IOB predictions, log the first and last values
+        if (determineBasalResult.predBGs.IOB && determineBasalResult.predBGs.IOB.length) {
+          console.log("IOB predictions length:", determineBasalResult.predBGs.IOB.length);
+          console.log("IOB predictions first:", determineBasalResult.predBGs.IOB[0]);
+          console.log("IOB predictions last:", determineBasalResult.predBGs.IOB[determineBasalResult.predBGs.IOB.length-1]);
+        }
+        
+        // If we have ZT predictions, log the first and last values
+        if (determineBasalResult.predBGs.ZT && determineBasalResult.predBGs.ZT.length) {
+          console.log("ZT predictions length:", determineBasalResult.predBGs.ZT.length);
+          console.log("ZT predictions first:", determineBasalResult.predBGs.ZT[0]);
+          console.log("ZT predictions last:", determineBasalResult.predBGs.ZT[determineBasalResult.predBGs.ZT.length-1]);
+        }
       }
-    }
-    
-    console.log('Determine Basal Result:', {
-      rate: determineBasalResult.rate,
-      duration: determineBasalResult.duration,
-      reason: determineBasalResult.reason,
-      eventualBG: determineBasalResult.eventualBG
-    });
       
       // Save the suggestion
       this.data.enact.suggested = determineBasalResult;
@@ -912,199 +1174,6 @@ class InMemoryLoop {
       return this.getDefaultRecommendation();
     }
   }
-
-//   determineBasal() {
-//     try {
-//       // Get glucose status (delta, etc.)
-//       const glucose_status = getLastGlucose(this.data.monitor.glucose);
-      
-//       // Get the current glucose reading
-//       const current_glucose = this.data.monitor.glucose[0] || { sgv: 120 };
-//       const bg = current_glucose.sgv;
-      
-//       this.logger.info('Current BG: %o', { bg, units: 'mg/dl' });
-      
-//       // Use the complete profile structure from our settings
-//       // No need to rebuild - use the structure directly
-//       const profile = this.data.settings.profile;
-      
-//       // Log key settings for debugging
-//       this.logger.info('Glucose status: %o', glucose_status);
-//       this.logger.info('IOB data: %o', this.data.monitor.iob[0]);
-//       this.logger.info('Profile key settings: %o', {
-//         dia: profile.dia,
-//         curve: profile.curve,
-//         insulinPeakTime: profile.insulinPeakTime,
-//         useCustomPeakTime: profile.useCustomPeakTime,
-//         current_basal: profile.current_basal,
-//         sens: profile.sens,
-//         has_basal_profile: Array.isArray(profile.basalprofile)
-//       });
-      
-//       // Current temporary basal
-//       const temp = {
-//         duration: this.data.monitor.temp_basal.duration || 0,
-//         rate: this.data.monitor.temp_basal.rate || 0,
-//         temp: "absolute"
-//       };
-      
-//       // IOB data as an array (required format)
-//       const iob_data = this.data.monitor.iob.length > 0 ? 
-//         this.data.monitor.iob : 
-//         [{ iob: 0, activity: 0, basaliob: 0, bolusiob: 0 }];
-      
-//       // Meal data
-//       const meal_data = this.data.monitor.meal || {
-//         carbs: 0,
-//         mealCOB: 0,
-//         currentDeviation: 0,
-//         maxDeviation: 0,
-//         minDeviation: 0
-//       };
-      
-//       // Standard autosens
-//       const autosens_data = this.data.settings.autosens || { ratio: 1.0 };
-//       this.logger.info("Autosens data: %o", autosens_data);
-      
-//       this.logger.info('Determine Basal Input: %o', {
-//         bg,
-//         iob: iob_data[0].iob,
-//         cob: meal_data.mealCOB
-//       });
-  
-//       this.logger.info("Pre-determine_basal - Effective ISF: %o", {
-//         profileSens: profile.sens,
-//         firstSensitivity: profile.isfProfile.sensitivities[0].sensitivity,
-//         autosensRatio: autosens_data.ratio,
-//         effectiveISF: profile.sens * autosens_data.ratio
-//       });
-  
-//       // Ensure SMB settings are properly set before calling determine_basal
-//       this.logger.info("SMB settings check: %o", {
-//         enableSMB_always: profile.enableSMB_always,
-//         enableSMB_with_COB: profile.enableSMB_with_COB,
-//         enableUAM: profile.enableUAM
-//       });
-  
-//       // If not already set in the profile, ensure they're enabled:
-//       profile.enableSMB_always = true;
-//       profile.enableSMB_with_COB = true; 
-//       profile.enableUAM = true;
-      
-//       // Call determine-basal with all required inputs
-//       let determineBasalResult;
-//       try {
-//         determineBasalResult = determine_basal(
-//           glucose_status,
-//           temp,
-//           iob_data,
-//           profile,
-//           autosens_data,
-//           meal_data,
-//           tempBasalFunctions,
-//           true
-//         );
-//       } catch (basal_error) {
-//         this.logger.error("Error in determine_basal call: %o", basal_error);
-//         return this.getDefaultRecommendation();
-//       }
-  
-//       // Check if determineBasalResult exists before trying to access properties
-//       if (!determineBasalResult) {
-//         this.logger.error("determine-basal returned null");
-//         return this.getDefaultRecommendation();
-//       }
-  
-//       // Safely log ISF information - only if it exists
-//       if (determineBasalResult.ISF !== undefined) {
-//         this.logger.info("Raw determine_basal result ISF: %o", {
-//           isfInResult: determineBasalResult.ISF,
-//           typeOfISF: typeof determineBasalResult.ISF,
-//           valueInMgDl: determineBasalResult.ISF
-//         });
-//       } else {
-//         this.logger.info("determineBasalResult does not contain ISF");
-//       }
-  
-//       // Safely handle mmol/L conversion
-//       if (profile.out_units === "mmol/L" && determineBasalResult.ISF !== undefined) {
-//         // Store the original ISF value before it gets converted to a string
-//         determineBasalResult.ISF_mgdl = determineBasalResult.ISF ? 
-//           (parseFloat(determineBasalResult.ISF) * 18).toFixed(1) : null;
-        
-//         this.logger.info("Preserving ISF in mg/dL: %o", {
-//           displayISF: determineBasalResult.ISF,
-//           internalISF_mgdl: determineBasalResult.ISF_mgdl
-//         });
-//       }
-      
-//       // Add missing fields when "doing nothing"
-//       if (determineBasalResult.rate === undefined) {
-//         determineBasalResult.rate = profile.current_basal; // Use current basal
-//       }
-      
-//       if (determineBasalResult.duration === undefined) {
-//         determineBasalResult.duration = 0; // No temp basal duration
-//       }
-      
-//       determineBasalResult.deliverAt = determineBasalResult.deliverAt || new Date();
-      
-//       // Make sure eventualBG is set (this affects prediction data)
-//       if (determineBasalResult.eventualBG === undefined) {
-//         // Extract eventualBG from the reason string if possible
-//         const reason = determineBasalResult.reason || '';
-//         const eventualBGMatch = reason.match(/eventualBG (\d+)/);
-//         if (eventualBGMatch && eventualBGMatch[1]) {
-//           determineBasalResult.eventualBG = parseInt(eventualBGMatch[1]);
-//         } else {
-//           // Default to current BG if we can't extract it
-//           determineBasalResult.eventualBG = glucose_status.glucose;
-//         }
-//       }
-      
-//       this.logger.info('Determine Basal Result: %o', {
-//         rate: determineBasalResult.rate,
-//         duration: determineBasalResult.duration,
-//         reason: determineBasalResult.reason || 'No reason provided',
-//         eventualBG: determineBasalResult.eventualBG
-//       });
-  
-//       // Safely log prediction data
-//       if (determineBasalResult.predBGs) {
-//         this.logger.info("Predictions from determine_basal: %o", determineBasalResult.predBGs);
-//         this.logger.info("Keys in predBGs: %o", Object.keys(determineBasalResult.predBGs));
-        
-//         // If we have IOB predictions, log the first and last values
-//         if (determineBasalResult.predBGs.IOB && determineBasalResult.predBGs.IOB.length > 0) {
-//           this.logger.info("IOB predictions length: %o", determineBasalResult.predBGs.IOB.length);
-//           this.logger.info("IOB predictions first: %o", determineBasalResult.predBGs.IOB[0]);
-//           this.logger.info("IOB predictions last: %o", 
-//             determineBasalResult.predBGs.IOB[determineBasalResult.predBGs.IOB.length-1]);
-//         }
-        
-//         // If we have ZT predictions, log the first and last values
-//         if (determineBasalResult.predBGs.ZT && determineBasalResult.predBGs.ZT.length > 0) {
-//           this.logger.info("ZT predictions length: %o", determineBasalResult.predBGs.ZT.length);
-//           this.logger.info("ZT predictions first: %o", determineBasalResult.predBGs.ZT[0]);
-//           this.logger.info("ZT predictions last: %o", 
-//             determineBasalResult.predBGs.ZT[determineBasalResult.predBGs.ZT.length-1]);
-//         }
-//       } else {
-//         this.logger.info("No prediction data available from determine_basal");
-//       }
-      
-//       // Save the suggestion
-//       this.data.enact.suggested = determineBasalResult;
-      
-//       return determineBasalResult;
-//     } catch (error) {
-//       this.logger.error('Error determining basal: %o', { 
-//         err: error, 
-//         stack: error.stack || String(error) 
-//       });
-//       return this.getDefaultRecommendation();
-//     }
-// }
 
 async enactTreatments(recommendations) {
   console.log('Enacting treatments: ', {
@@ -1283,9 +1352,21 @@ async enactTreatments(recommendations) {
 }
 
   createDeviceStatus(recommendations) {
+    // Fallback values
+    const fallbacks = {
+      current_basal: 0.7,
+      sens: 36,
+      carb_ratio: 10,
+      min_bg: 100,
+      max_iob: 3,
+      curve: 'ultra-rapid'
+    };
+    
     const now = new Date();
     const mills = now.getTime();
     const timeString = now.toISOString();
+    
+    // Use iobData with fallbacks if needed
     const iobData = this.data.monitor.iob[0] || {
       iob: 0,
       activity: 0,
@@ -1296,8 +1377,19 @@ async enactTreatments(recommendations) {
       mills: mills
     };
     
-    // Get most recent glucose reading
-    const currentBG = this.data.monitor.glucose[0]?.sgv;
+    // Get most recent glucose reading with fallback
+    const currentBG = this.data.monitor.glucose && this.data.monitor.glucose.length > 0 
+      ? this.data.monitor.glucose[0].sgv 
+      : 120;
+    
+    // Track fallback usage 
+    let fallbacksUsed = [];
+    
+    // Get current basal rate with fallback
+    const current_basal = this.data.settings.profile?.current_basal || fallbacks.current_basal;
+    if (current_basal === fallbacks.current_basal) {
+      fallbacksUsed.push('current_basal');
+    }
     
     // Create a complete iob object with no undefined values
     const completeIobObj = {
@@ -1320,7 +1412,7 @@ async enactTreatments(recommendations) {
       },
       lastBolusTime: iobData.lastBolusTime || 0,
       lastTemp: iobData.lastTemp || {
-        rate: this.data.settings.profile.current_basal,
+        rate: current_basal,
         timestamp: timeString,
         started_at: timeString,
         date: mills,
@@ -1335,7 +1427,7 @@ async enactTreatments(recommendations) {
     
     // Calculate glucose trend indicators
     let tick = "+0";
-    if (this.data.monitor.glucose.length >= 2) {
+    if (this.data.monitor.glucose && this.data.monitor.glucose.length >= 2) {
       const currentBG = this.data.monitor.glucose[0].sgv;
       const prevBG = this.data.monitor.glucose[1].sgv;
       const delta = currentBG - prevBG;
@@ -1352,10 +1444,33 @@ async enactTreatments(recommendations) {
     }
     
     // Get current COB
-    const COB = Math.round(this.data.monitor.meal.mealCOB || 0);
+    const COB = Math.round(this.data.monitor.meal?.mealCOB || 0);
+    
+    // Get ISF with fallback
+    const isf = this.data.settings.profile?.sens || fallbacks.sens;
+    if (isf === fallbacks.sens) {
+      fallbacksUsed.push('sens');
+    }
+    
+    // Get carb ratio with fallback
+    const carb_ratio = this.data.settings.profile?.carb_ratio || fallbacks.carb_ratio;
+    if (carb_ratio === fallbacks.carb_ratio) {
+      fallbacksUsed.push('carb_ratio');
+    }
+    
+    // Get target BG with fallback
+    const target_bg = this.data.settings.profile?.min_bg || fallbacks.min_bg;
+    if (target_bg === fallbacks.min_bg) {
+      fallbacksUsed.push('min_bg');
+    }
+    
+    // Log fallback usage if any
+    if (fallbacksUsed.length > 0) {
+      console.warn('FALLBACK ALERT: Using fallback values in createDeviceStatus for:', fallbacksUsed.join(', '));
+    }
     
     // Build the complete device status object
-    return {
+    const deviceStatus = {
       device: "openaps://cgmsimoref0-node",
       openaps: {
         iob: completeIobObj,
@@ -1373,9 +1488,9 @@ async enactTreatments(recommendations) {
           IOB: completeIobObj.iob || 0,
           BGI: recommendations.BGI || 0,
           deviation: recommendations.deviation || 0,
-          ISF: recommendations.ISF || this.data.settings.profile.sens,
-          CR: recommendations.CR || this.data.settings.profile.carb_ratio,
-          target_bg: recommendations.target_bg || this.data.settings.profile.min_bg,
+          ISF: recommendations.ISF || isf,
+          CR: recommendations.CR || carb_ratio,
+          target_bg: recommendations.target_bg || target_bg,
           reason: recommendations.reason,
           duration: recommendations.duration,
           rate: recommendations.rate,
@@ -1415,23 +1530,28 @@ async enactTreatments(recommendations) {
         }
       },
       preferences: {
-        max_iob: this.data.settings.profile.max_iob || 6,
-        max_daily_safety_multiplier: this.data.settings.profile.max_daily_safety_multiplier || 4,
-        current_basal_safety_multiplier: this.data.settings.profile.current_basal_safety_multiplier || 5,
-        autosens_max: this.data.settings.profile.autosens_max || 2,
-        autosens_min: this.data.settings.profile.autosens_min || 0.7,
+        // Use the preferences values if available, otherwise use safe defaults
+        max_iob: this.preferences?.max_iob ?? fallbacks.max_iob,
+        max_daily_safety_multiplier: this.preferences?.max_daily_safety_multiplier ?? 3,
+        current_basal_safety_multiplier: this.preferences?.current_basal_safety_multiplier ?? 4,
+        autosens_max: this.preferences?.autosens_max ?? 1.2,
+        autosens_min: this.preferences?.autosens_min ?? 0.7,
         rewind_resets_autosens: true,
-        exercise_mode: false,
-        sensitivity_raises_target: true,
+        exercise_mode: this.preferences?.exercise_mode ?? false,
+        sensitivity_raises_target: this.preferences?.sensitivity_raises_target ?? false,
+        resistance_lowers_target: this.preferences?.resistance_lowers_target ?? false,
         unsuspend_if_no_temp: false,
-        enableSMB_always: this.data.settings.profile.enableSMB_always || true,
-        enableSMB_with_COB: this.data.settings.profile.enableSMB_with_COB || true,
-        enableSMB_with_temptarget: this.data.settings.profile.enableSMB_with_temptarget || false,
-        enableUAM: this.data.settings.profile.enableUAM || true,
-        curve: this.data.settings.profile.curve || "ultra-rapid",
+        enableSMB_always: this.preferences?.enableSMB_always ?? false,
+        enableSMB_with_COB: this.preferences?.enableSMB_with_COB ?? false,
+        enableSMB_with_temptarget: this.preferences?.enableSMB_with_temptarget ?? false,
+        enableSMB_after_carbs: this.preferences?.enableSMB_after_carbs ?? false,
+        enableUAM: this.preferences?.enableUAM ?? false,
+        curve: this.preferences?.curve ?? fallbacks.curve,
         offline_hotspot: false,
         cgm: "g5-upload",
-        timestamp: timeString
+        timestamp: timeString,
+        // Add indicator if we used any fallbacks
+        fallbacks_used: fallbacksUsed.length > 0 ? fallbacksUsed : undefined
       },
       uploader: {
         batteryVoltage: 3861,
@@ -1441,6 +1561,8 @@ async enactTreatments(recommendations) {
       mills: mills,
       created_at: timeString
     };
+    
+    return deviceStatus;
   }
 
   calculateAutosens() {
@@ -1510,6 +1632,7 @@ async enactTreatments(recommendations) {
       // 2. Fetch fresh data from Nightscout
       await this.fetchCGMData();
       await this.fetchPumpHistory();
+      await this.fetchProfile();
       
       // 3. Calculate meal data directly
       this.calculateMeal();

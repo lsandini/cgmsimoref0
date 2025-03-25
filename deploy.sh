@@ -1,5 +1,5 @@
 #!/bin/bash
 
 git add .
-git commit -m "clean useless var from .env"
-git push -u origin lt1
+git commit -m "get profile from NS and use preferences.json"
+git push -u origin breakdown
