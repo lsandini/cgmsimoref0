@@ -1,24 +1,69 @@
+// mpc.js
 require('dotenv').config();
-const InMemoryLoop = require('./InMemoryLoop');
-const config = require('./config');
+const { loadConfig } = require('./utils/config');
+const { logger } = require('./utils/logger');
+const { createNightscoutClient } = require('./api/nightscout');
+const { fetchLoopData } = require('./transforms/data');
+const { calculateIOB } = require('./algorithms/insulin');
+const { calculateMeal } = require('./algorithms/meal');
+const { calculateAutosens } = require('./algorithms/sensitivity');
+const { determineBasal } = require('./algorithms/basal');
+const { enactTreatments } = require('./api/treatments');
+const { uploadDeviceStatus } = require('./api/deviceStatus');
 
-// Create a single function that runs one loop cycle
+/**
+ * Run a single OpenAPS loop cycle
+ * @returns {Promise<Object>} - Loop results
+ */
 async function runLoopCycle() {
+  const cycleStartTime = new Date();
+  logger.info('=== START OF LOOP CYCLE ===');
+  logger.info('Cycle Start Time:', cycleStartTime.toISOString());
+  
   try {
-    // Create a new loop instance for each cycle
-    const loop = new InMemoryLoop(config);
+    // Load configuration
+    const config = loadConfig('./config.json');
     
-    // Initialize the loop before running the cycle
-    await loop.initialize();
+    // Create Nightscout client
+    const nsClient = createNightscoutClient(config.nightscout);
     
-    // Run a single cycle
-    const recommendations = await loop.runCycle();
+    // Fetch all required data
+    const state = await fetchLoopData(nsClient, config);
     
-    console.log('Loop cycle completed at:', new Date().toISOString());
+    // Calculate IOB
+    state.iob = calculateIOB(state);
+    logger.info('IOB calculated:', { iob: state.iob[0].iob });
+    
+    // Calculate meal/COB
+    state.meal = calculateMeal(state);
+    logger.info('Meal calculated:', { cob: state.meal.mealCOB });
+    
+    // Calculate autosensitivity
+    state.autosens = calculateAutosens(state);
+    logger.info('Autosens calculated:', { ratio: state.autosens.ratio });
+    
+    // Determine basal
+    const recommendations = determineBasal(state);
+    logger.info('Basal determined:', { 
+      rate: recommendations.rate,
+      duration: recommendations.duration
+    });
+    
+    // Enact treatments
+    const enacted = await enactTreatments(recommendations, nsClient, state);
+    logger.info('Treatments enacted:', { enacted: !!enacted });
+    
+    // Upload device status
+    await uploadDeviceStatus(state, recommendations, nsClient);
+    
+    const cycleEndTime = new Date();
+    logger.info('Cycle End Time:', cycleEndTime.toISOString());
+    logger.info('Cycle Duration:', (cycleEndTime - cycleStartTime) / 1000, 'seconds');
+    logger.info('=== END OF LOOP CYCLE ===');
     
     return recommendations;
   } catch (error) {
-    console.error('Error in loop cycle:', error);
+    logger.error('Error in loop cycle:', error);
     throw error;
   }
 }
@@ -30,11 +75,12 @@ module.exports = runLoopCycle;
 if (require.main === module) {
   (async () => {
     try {
-      console.log('Running OpenAPS loop manually...');
+      logger.info('Running OpenAPS loop manually...');
       await runLoopCycle();
-      console.log('Loop cycle completed successfully');
+      logger.info('Loop cycle completed successfully');
+      process.exit(0);
     } catch (error) {
-      console.error('Error running loop:', error);
+      logger.error('Error running loop:', error);
       process.exit(1);
     }
   })();
