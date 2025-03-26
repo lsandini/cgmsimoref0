@@ -15,13 +15,17 @@ const fetchLoopData = async (nsClient, config) => {
   };
   
   try {
-    // Fetch Nightscout profile first
-    logger.info('Fetching profile from Nightscout');
-    const nsProfile = await nsClient.getProfile();
+    // Process profile (assuming it's already fetched in mpc.js)
+    if (config.profile) {
+      state.profile = processProfile(config.profile, config.defaultProfile);
+    } else {
+      // Fallback in case profile wasn't passed
+      logger.info('Fetching profile from Nightscout');
+      const nsProfile = await nsClient.getProfile();
+      state.profile = processProfile(nsProfile, config.defaultProfile);
+    }
     
-    // Process profile
-    state.profile = processProfile(nsProfile, config.defaultProfile);
-    
+    // Rest of the function remains the same...
     // Fetch glucose data (24 hours for autosens, recent for loop)
     logger.info('Fetching glucose readings');
     const allGlucose = await nsClient.getEntries(24);

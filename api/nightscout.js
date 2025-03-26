@@ -1,4 +1,3 @@
-// api/nightscout.js (complete)
 const fetch = require('node-fetch');
 const { logger } = require('../utils/logger');
 
@@ -12,33 +11,85 @@ const createNightscoutClient = (config) => {
   const token = config.api_secret || '';
   const headers = token ? { 'api-secret': token } : {};
   
-  /**
-   * Make an HTTP request to Nightscout API
-   * @param {string} endpoint - API endpoint
-   * @param {Object} options - Fetch options
-   * @returns {Promise<any>} - Parsed response data
-   */
-  const makeRequest = async (endpoint, options = {}) => {
-    const url = `${baseURL}${endpoint}`;
-    const fetchOptions = {
-      headers,
-      timeout: 10000,
-      ...options
-    };
-    
-    try {
-      const response = await fetch(url, fetchOptions);
-      
-      if (!response.ok) {
-        throw new Error(`HTTP error ${response.status}: ${response.statusText}`);
-      }
-      
-      return await response.json();
-    } catch (error) {
-      logger.error(`Error making request to ${url}:`, error);
-      throw error;
-    }
+/**
+ * Make an HTTP request to Nightscout API
+ * @param {string} endpoint - API endpoint
+ * @param {Object} options - Fetch options
+ * @returns {Promise<any>} - Parsed response data
+ */
+const makeRequest = async (endpoint, options = {}) => {
+  const url = `${baseURL}${endpoint}`;
+  const fetchOptions = {
+    headers,
+    timeout: 10000,
+    ...options
   };
+  
+  try {
+    const response = await fetch(url, fetchOptions);
+    
+    if (!response.ok) {
+      throw new Error(`HTTP error ${response.status}: ${response.statusText}`);
+    }
+    
+    // First get the response as text
+    const text = await response.text();
+    
+    // Custom parsing for entries endpoint
+    if (endpoint.includes('/entries')) {
+      try {
+        // Try to parse as JSON first (for normal cases)
+        return JSON.parse(text);
+      } catch (jsonParseError) {
+        // If JSON parsing fails, attempt to construct JSON manually
+        const entries = parseEntriesFromText(text);
+        if (entries.length > 0) {
+          return entries;
+        }
+        
+        // If parsing fails, log the error and rethrow
+        logger.error(`Custom parsing failed for ${url}:`, text);
+        throw jsonParseError;
+      }
+    }
+    
+    // For other endpoints, use standard JSON parsing
+    return JSON.parse(text);
+  } catch (error) {
+    logger.error(`Error making request to ${url}:`, error);
+    throw error;
+  }
+};
+
+/**
+ * Parse entries from raw text response
+ * @param {string} text - Raw text response
+ * @returns {Array} - Parsed entries
+ */
+const parseEntriesFromText = (text) => {
+  // Split the text into lines
+  const lines = text.trim().split('\n');
+  
+  // Parse each line into an entry
+  const entries = lines.map(line => {
+    // Split the line by tabs or multiple spaces
+    const parts = line.trim().split(/\s+/);
+    
+    // Ensure we have enough parts to create an entry
+    if (parts.length >= 4) {
+      return {
+        dateString: parts[0].replace(/"/g, ''),
+        date: parseInt(parts[1]),
+        sgv: parseInt(parts[2]),
+        direction: parts[3].replace(/"/g, '')
+      };
+    }
+    
+    return null;
+  }).filter(entry => entry !== null);
+  
+  return entries;
+};
   
   /**
    * Fetch glucose readings from Nightscout
