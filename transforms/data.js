@@ -25,7 +25,6 @@ const fetchLoopData = async (nsClient, config) => {
       state.profile = processProfile(nsProfile, config.defaultProfile);
     }
     
-    // Rest of the function remains the same...
     // Fetch glucose data (24 hours for autosens, recent for loop)
     logger.info('Fetching glucose readings');
     const allGlucose = await nsClient.getEntries(24);
@@ -36,7 +35,9 @@ const fetchLoopData = async (nsClient, config) => {
     const treatments = await nsClient.getTreatments(24);
     
     // Process treatments into pump history format
-    state.pumpHistory = processTreatments(treatments);
+    const { pumpHistory, carbHistory } = processTreatments(treatments);
+    state.pumpHistory = pumpHistory;
+    state.carbHistory = carbHistory;
     
     // Add preferences to state
     state.preferences = config.preferences || {};
@@ -52,7 +53,7 @@ const fetchLoopData = async (nsClient, config) => {
 /**
  * Process Nightscout treatments into pump history format
  * @param {Array} treatments - Nightscout treatments
- * @returns {Array} - Formatted pump history
+ * @returns {Object} - Formatted pump history and carb history
  */
 const processTreatments = (treatments) => {
   // Filter to recent treatments only (last 24 hours)
@@ -64,6 +65,7 @@ const processTreatments = (treatments) => {
 
   // Convert to pump history format
   const pumpHistory = [];
+  const carbHistory = [];
 
   recentTreatments.forEach(treatment => {
     const timestamp = treatment.created_at || treatment.timestamp || new Date().toISOString();
@@ -104,13 +106,16 @@ const processTreatments = (treatments) => {
 
     // Convert carb entries
     if (treatment.carbs) {
-      pumpHistory.push({
+      const carbEntry = {
         _type: 'Meal',
         timestamp: timestamp,
         carbs: parseInt(treatment.carbs),
         created_at: timestamp,
         date: dateNum
-      });
+      };
+
+      pumpHistory.push(carbEntry);
+      carbHistory.push(carbEntry);
     }
   });
 
@@ -118,7 +123,7 @@ const processTreatments = (treatments) => {
   pumpHistory.sort((a, b) => b.date - a.date);
 
   logger.info(`Processed ${pumpHistory.length} pump history records`);
-  return pumpHistory;
+  return { pumpHistory, carbHistory };
 };
 
 /**

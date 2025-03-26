@@ -46,7 +46,10 @@ const processProfile = (nsProfile, defaultProfile = defaultProfileValues) => {
       dia: getProfileValue(rawProfile, 'dia', defaultProfile.dia),
       current_basal: extractBasalRate(rawProfile),
       // Store original units to track conversions
-      original_units: rawProfile.units || 'mg/dL'
+      original_units: rawProfile.units || 'mg/dL',
+      
+      // NEW: Add maxCOB from preferences or default
+      maxCOB: defaultProfile.maxCOB || 120
     };
     
     // Extract and possibly convert sensitivity factor
