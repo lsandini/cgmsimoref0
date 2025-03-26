@@ -2,30 +2,37 @@
 const { logger } = require('../utils/logger');
 
 /**
- * Validate and prepare inputs for meal calculation
+ * Prepare and validate inputs for meal calculation
  * @param {Object} state - Current loop state
- * @returns {Object} - Prepared inputs for meal calculation
+ * @returns {Object} - Prepared inputs
  */
 const prepareInputs = (state) => {
-  // Ensure all required fields are present and valid
-  const inputs = {
+  // Prepare carb inputs with additional processing
+  const carbEntries = state.carbHistory.filter(entry => entry.carbs > 0)
+    .map(entry => {
+      const carbTime = new Date(entry.timestamp);
+      return {
+        ...entry,
+        timestamp: carbTime.toISOString(),
+        date: carbTime.getTime(),
+        carbs: entry.carbs,
+        nsCarbs: entry.carbs,
+        _type: 'Meal',
+        eventType: 'Carb Entry'
+      };
+    });
+
+  // Sort carb entries by timestamp (most recent first)
+  carbEntries.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+
+  return {
     history: state.pumpHistory || [],
     profile: state.profile || {},
     clock: state.clock || new Date().toISOString(),
     glucose: state.glucose || [],
     basalprofile: state.profile.basalprofile || [],
-    carbs: state.carbHistory || []
+    carbs: carbEntries
   };
-
-  // Log detailed input validation
-  logger.debug('Meal Calculation Input Validation', {
-    historyCount: inputs.history.length,
-    profileExists: !!inputs.profile,
-    glucoseCount: inputs.glucose.length,
-    carbCount: inputs.carbs.length
-  });
-
-  return inputs;
 };
 
 /**
@@ -92,17 +99,12 @@ const calculateMeal = (state) => {
     const findMealInputs = require('oref0/lib/meal/history');
     const generateMeal = require('oref0/lib/meal');
     
-    // Prepare and validate inputs
+    // Prepare inputs
     const inputs = prepareInputs(state);
     
-    // Log detailed carb history for debugging
-    const carbEntries = inputs.carbs.filter(entry => entry.carbs > 0);
-    logger.debug('Carb Entries for Meal Calculation', {
-      totalEntries: carbEntries.length,
-      entriesDetails: carbEntries.map(entry => ({
-        carbs: entry.carbs,
-        timestamp: entry.timestamp
-      }))
+    // Manually log the inputs to debug
+    logger.info('Carb Entries for Meal Calculation', {
+      carbEntries: JSON.stringify(inputs.carbs, null, 2)
     });
     
     // Find treatments using meal history module
@@ -113,19 +115,17 @@ const calculateMeal = (state) => {
       
       // Generate meal data using the oref0 library function
       mealData = generateMeal(inputs);
+      
+      // Log the raw meal data
+      logger.info('Oref0 Meal Data', JSON.stringify(mealData, null, 2));
     } catch (mealCalcError) {
-      logger.warn('Oref0 meal calculation failed, using manual calculation', {
-        error: mealCalcError.message
+      logger.warn('Oref0 meal calculation failed', {
+        error: mealCalcError.message,
+        stack: mealCalcError.stack
       });
       
-      // Fallback to manual calculations if oref0 fails
-      mealData = {
-        carbs: carbEntries.reduce((total, entry) => total + entry.carbs, 0),
-        mealCOB: 0,  // Will be replaced by manual calculation
-        nsCarbs: 0,
-        bwCarbs: 0,
-        journalCarbs: 0
-      };
+      // Force manual calculation if oref0 fails
+      mealData = { carbs: 0, mealCOB: 0 };
     }
     
     // Calculate manual COB and carbs absorbed
@@ -133,19 +133,23 @@ const calculateMeal = (state) => {
     const myCarbsAbsorbed = calculateCarbsAbsorbed(state);
     
     // Find the last carb entry
+    const carbEntries = state.carbHistory.filter(entry => entry.carbs > 0);
     const lastCarbEntry = carbEntries.length > 0 
       ? carbEntries.reduce((latest, current) => 
           (new Date(current.timestamp) > new Date(latest.timestamp) ? current : latest)
         )
       : null;
     
+    // Determine total carbs
+    const totalCarbs = carbEntries.reduce((total, entry) => total + entry.carbs, 0);
+    
     // Create final meal data object
     const finalMealData = {
-      carbs: mealData.carbs || 0,
-      nsCarbs: mealData.nsCarbs || 0,
-      bwCarbs: mealData.bwCarbs || 0,
-      journalCarbs: mealData.journalCarbs || 0,
-      mealCOB: mealData.mealCOB || manualCOB,
+      carbs: totalCarbs,
+      nsCarbs: totalCarbs,
+      bwCarbs: 0,
+      journalCarbs: 0,
+      mealCOB: Math.max(mealData.mealCOB || 0, manualCOB),
       COB: manualCOB,
       currentDeviation: mealData.currentDeviation || 0,
       maxDeviation: mealData.maxDeviation || 0,
