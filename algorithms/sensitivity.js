@@ -1,104 +1,88 @@
-// algorithms/meal.js
+// algorithms/sensitivity.js
 const { logger } = require('../utils/logger');
 
 /**
- * Calculate meal data including Carbs on Board (COB)
+ * Calculate autosensitivity based on historical data
  * @param {Object} state - Current loop state
- * @returns {Object} - Meal data including COB
+ * @returns {Object} - Autosensitivity result
  */
-const calculateMeal = (state) => {
+const calculateAutosens = (state) => {
   try {
-    logger.info('Calculating meal data');
+    logger.info('Calculating autosensitivity...');
     
-    // Import oref0 meal modules
-    const findMealInputs = require('oref0/lib/meal/history');
-    const generateMeal = require('oref0/lib/meal');
+    // Import oref0 autosens module
+    const detectSensitivity = require('oref0/lib/determine-basal/autosens');
     
-    // Structure inputs exactly as the oref0-meal.js command expects
-    const inputs = {
-      history: state.pumpHistory,
-      profile: state.profile,
-      clock: state.clock || new Date().toISOString(),
-      glucose: state.glucose,
+    // Prepare inputs similar to oref0-autosens-loop
+    const detection_inputs = {
+      iob_inputs: {
+        profile: state.profile,
+        history: state.pumpHistory
+      },
+      glucose_data: state.glucose,
       basalprofile: state.profile.basalprofile,
-      carbs: filterCarbHistory(state.pumpHistory)
+      temptargets: [], // Add temp targets if available
+      retrospective: true,
+      deviations: 96, // Look at last 96 readings (8 hours at 5 min intervals)
+      carbs: state.carbHistory || [] 
     };
     
-    // Find treatments using meal history module
-    const treatments = findMealInputs(inputs);
-    logger.debug('Meal Inputs:', { count: treatments.length });
+    // Call detectSensitivity to calculate autosens ratio
+    const autosens_result = detectSensitivity(detection_inputs);
     
-    // Check for duplicate entries
-    checkForDuplicates(treatments);
+    // Process the result to ensure valid numbers
+    const processed_result = {
+      ratio: processNumber(autosens_result.ratio, 1.0),
+      newisf: processNumber(autosens_result.newisf, state.profile.sens),
+      timestamp: new Date().toISOString()
+    };
     
-    // Generate meal data using the oref0 library function
-    const mealData = generateMeal(inputs);
-    
-    logger.info('Meal data calculated', {
-      carbs: mealData.carbs,
-      COB: mealData.mealCOB,
-      lastCarbTime: mealData.lastCarbTime ? 
-        new Date(mealData.lastCarbTime).toISOString() : 'N/A'
+    // Log the result
+    logger.info('Autosens calculation complete:', {
+      ratio: processed_result.ratio,
+      newisf: processed_result.newisf,
+      oldisf: state.profile.sens
     });
     
-    return mealData;
+    return processed_result;
   } catch (error) {
-    logger.error('Error calculating meal data:', error);
+    logger.error('Error calculating autosensitivity:', error);
+    logger.error('Error stack:', error.stack);
     
-    // Return a safe default if calculation fails
-    return createDefaultMeal();
+    // If autosens calculation fails, use a safe default
+    const default_ratio = 1.0;
+    
+    logger.warn('Using default autosens ratio:', default_ratio);
+    return {
+      ratio: default_ratio,
+      newisf: state.profile.sens,
+      timestamp: new Date().toISOString(),
+      error: error.toString()
+    };
   }
 };
 
 /**
- * Filter pump history to extract only carb entries
- * @param {Array} pumpHistory - Pump history data
- * @returns {Array} - Carb entries
+ * Process a number to ensure it's valid, otherwise return default
+ * @param {*} value - Value to process
+ * @param {number} defaultValue - Default value if invalid
+ * @returns {number} - Processed number
  */
-const filterCarbHistory = (pumpHistory) => {
-  return pumpHistory.filter(entry => 
-    entry._type === 'Meal' || (entry.carbs && entry.carbs > 0)
-  );
-};
-
-/**
- * Check for and log duplicate treatment entries
- * @param {Array} treatments - Treatment entries
- */
-const checkForDuplicates = (treatments) => {
-  const uniqueTimestamps = new Set();
-  let duplicateCount = 0;
-  
-  treatments.forEach(t => {
-    if (uniqueTimestamps.has(t.timestamp)) {
-      duplicateCount++;
-    } else {
-      uniqueTimestamps.add(t.timestamp);
-    }
-  });
-  
-  if (duplicateCount > 0) {
-    logger.warn(`Found ${duplicateCount} duplicate treatment entries`);
+const processNumber = (value, defaultValue) => {
+  // Check if value is null, undefined, NaN, or not a number
+  if (value === null || value === undefined || isNaN(value) || typeof value !== 'number') {
+    return defaultValue;
   }
-};
-
-/**
- * Create default meal data with safe values
- * @returns {Object} - Default meal data
- */
-const createDefaultMeal = () => {
-  return {
-    carbs: 0,
-    nsCarbs: 0,
-    bwCarbs: 0,
-    journalCarbs: 0,
-    mealCOB: 0,
-    currentDeviation: 0,
-    maxDeviation: 0,
-    minDeviation: 0
-  };
+  
+  // If value is infinite, return default
+  if (!isFinite(value)) {
+    return defaultValue;
+  }
+  
+  // Return the original value
+  return value;
 };
 
 module.exports = {
-  calculateMeal
+  calculateAutosens
 };

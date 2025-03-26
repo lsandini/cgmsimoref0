@@ -65,6 +65,13 @@ const processProfile = (nsProfile, defaultProfile = defaultProfileValues) => {
     
     // Force internal calculations to display in mg/dL
     profile.out_units = "mg/dL";
+
+    // Add these fields to the profile object
+    profile.carbs_hr = 30; // Default carbs per hour absorption rate
+    profile.csf = profile.sens / profile.carb_ratio; // Carb sensitivity factor
+
+    // Make sure this is included
+    profile.maxCOB = defaultProfile.maxCOB || 120;
     
     // Add required type field
     profile.type = "current";
