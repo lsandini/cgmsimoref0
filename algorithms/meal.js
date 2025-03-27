@@ -1,200 +1,115 @@
 // algorithms/meal.js
-const { logger } = require('../utils/logger');
+const findMealInputs = require('oref0/lib/meal/history');
+const generateMeal = require('oref0/lib/meal');
+const logger = require('../utils/logger');
 
 /**
- * Prepare and validate inputs for meal calculation
- * @param {Object} state - Current loop state
- * @returns {Object} - Prepared inputs
+ * Creates functions for meal data calculations
+ * @returns {Object} - Functions for calculating meal-related metrics
  */
-const prepareInputs = (state) => {
-  // Prepare carb inputs with additional processing
-  const carbEntries = state.carbHistory.filter(entry => entry.carbs > 0)
-    .map(entry => {
-      const carbTime = new Date(entry.timestamp);
-      return {
-        ...entry,
-        timestamp: carbTime.toISOString(),
-        date: carbTime.getTime(),
-        carbs: entry.carbs,
-        nsCarbs: entry.carbs,
-        _type: 'Meal',
-        eventType: 'Carb Entry'
-      };
-    });
-
-  // Sort carb entries by timestamp (most recent first)
-  carbEntries.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-
-  return {
-    history: state.pumpHistory || [],
-    profile: state.profile || {},
-    clock: state.clock || new Date().toISOString(),
-    glucose: state.glucose || [],
-    basalprofile: state.profile.basalprofile || [],
-    carbs: carbEntries
-  };
-};
-
-/**
- * Calculate manual Carbs on Board
- * @param {Object} state - Current loop state
- * @returns {number} - Calculated COB
- */
-const calculateManualCOB = (state) => {
-  const carbEntries = state.carbHistory.filter(entry => entry.carbs > 0);
-  const carbAbsorptionRate = state.profile.carb_ratio || 10; // Default 10g/hr
-  const currentTime = new Date(state.clock || Date.now());
-  const maxCOB = state.profile.maxCOB || 120; // Max COB from profile or default
-  
-  const totalCOB = carbEntries.reduce((cob, entry) => {
-    const carbTime = new Date(entry.timestamp);
-    const hoursSinceCarbs = (currentTime - carbTime) / (1000 * 60 * 60);
-    
-    // Basic absorption calculation
-    const carbsAbsorbed = Math.min(entry.carbs, hoursSinceCarbs * carbAbsorptionRate);
-    const remainingCOB = Math.min(
-      maxCOB, 
-      Math.max(0, entry.carbs - carbsAbsorbed)
-    );
-    
-    return cob + remainingCOB;
-  }, 0);
-  
-  return totalCOB;
-};
-
-/**
- * Calculate absorbed carbs
- * @param {Object} state - Current loop state
- * @returns {number} - Calculated absorbed carbs
- */
-const calculateCarbsAbsorbed = (state) => {
-  const carbEntries = state.carbHistory.filter(entry => entry.carbs > 0);
-  const carbAbsorptionRate = state.profile.carb_ratio || 10; // Default 10g/hr
-  const currentTime = new Date(state.clock || Date.now());
-  
-  const totalAbsorbed = carbEntries.reduce((absorbed, entry) => {
-    const carbTime = new Date(entry.timestamp);
-    const hoursSinceCarbs = (currentTime - carbTime) / (1000 * 60 * 60);
-    
-    // Basic absorption calculation
-    const carbsAbsorbed = Math.min(entry.carbs, hoursSinceCarbs * carbAbsorptionRate);
-    
-    return absorbed + carbsAbsorbed;
-  }, 0);
-  
-  return totalAbsorbed;
-};
-
-/**
- * Calculate meal data including Carbs on Board (COB)
- * @param {Object} state - Current loop state
- * @returns {Object} - Meal data including COB
- */
-const calculateMeal = (state) => {
-  try {
-    logger.info('Calculating meal data');
-    
-    // Import oref0 meal modules
-    const findMealInputs = require('oref0/lib/meal/history');
-    const generateMeal = require('oref0/lib/meal');
-    
-    // Prepare inputs
-    const inputs = prepareInputs(state);
-    
-    // Manually log the inputs to debug
-    logger.info('Carb Entries for Meal Calculation', {
-      carbEntries: JSON.stringify(inputs.carbs, null, 2)
-    });
-    
-    // Find treatments using meal history module
-    let mealData;
+function createMealCalculations() {
+  /**
+   * Calculate meal data including COB
+   * @param {Object} data - Current data
+   * @param {Array} data.pumpHistory - Pump history records
+   * @param {Array} data.glucose - Glucose readings
+   * @param {Object} data.profile - OpenAPS profile
+   * @param {Array} data.basalProfile - Basal profile
+   * @param {Array} data.carbHistory - Carb history records
+   * @returns {Object} - Meal data including COB
+   */
+  function calculateMeal(data) {
     try {
+      logger.debug('Calculating meal data...');
+      
+      // Validate required inputs
+      if (!data.pumpHistory || !Array.isArray(data.pumpHistory)) {
+        logger.warn('Missing or invalid pump history, returning zero COB');
+        return createDefaultMeal();
+      }
+      
+      if (!data.glucose || !Array.isArray(data.glucose) || data.glucose.length === 0) {
+        logger.warn('Missing or invalid glucose data, returning zero COB');
+        return createDefaultMeal();
+      }
+      
+      if (!data.profile) {
+        logger.warn('Missing profile, returning zero COB');
+        return createDefaultMeal();
+      }
+      
+      // Structure inputs exactly as the oref0-meal.js command expects
+      const inputs = {
+        history: data.pumpHistory,
+        profile: data.profile,
+        clock: new Date().toISOString(),
+        glucose: data.glucose,
+        basalprofile: data.basalProfile || data.profile.basalprofile,
+        carbs: data.carbHistory || []
+      };
+      
+      // Find treatments using meal history module
       const treatments = findMealInputs(inputs);
-      logger.debug('Meal Inputs:', treatments);
+      logger.debug(`Found ${treatments.length} meal inputs`);
       
-      // Generate meal data using the oref0 library function
-      mealData = generateMeal(inputs);
+      // Count duplicate entries
+      const uniqueTimestamps = new Set();
+      let duplicateCount = 0;
       
-      // Log the raw meal data
-      logger.info('Oref0 Meal Data', JSON.stringify(mealData, null, 2));
-    } catch (mealCalcError) {
-      logger.warn('Oref0 meal calculation failed', {
-        error: mealCalcError.message,
-        stack: mealCalcError.stack
+      treatments.forEach(t => {
+        if (uniqueTimestamps.has(t.timestamp)) {
+          duplicateCount++;
+        } else {
+          uniqueTimestamps.add(t.timestamp);
+        }
       });
       
-      // Force manual calculation if oref0 fails
-      mealData = { carbs: 0, mealCOB: 0 };
+      if (duplicateCount > 0) {
+        logger.debug(`Found ${duplicateCount} duplicate meal entries`);
+      }
+      
+      // Generate meal data using the oref0 library function
+      const mealData = generateMeal(inputs);
+      
+      // Log the results
+      logger.info('Meal data calculated:', {
+        carbs: mealData.carbs,
+        COB: mealData.mealCOB,
+        lastCarbTime: mealData.lastCarbTime ? 
+          new Date(mealData.lastCarbTime).toISOString() : 'N/A'
+      });
+      
+      return mealData;
+    } catch (error) {
+      logger.error('Error calculating meal data', error);
+      return createDefaultMeal();
     }
+  }
+
+  /**
+   * Create default meal data with zero values
+   * @returns {Object} - Default meal data
+   */
+  function createDefaultMeal() {
+    logger.warn('Using default meal data with zero COB');
     
-    // Calculate manual COB and carbs absorbed
-    const manualCOB = calculateManualCOB(state);
-    const myCarbsAbsorbed = calculateCarbsAbsorbed(state);
-    
-    // Find the last carb entry
-    const carbEntries = state.carbHistory.filter(entry => entry.carbs > 0);
-    const lastCarbEntry = carbEntries.length > 0 
-      ? carbEntries.reduce((latest, current) => 
-          (new Date(current.timestamp) > new Date(latest.timestamp) ? current : latest)
-        )
-      : null;
-    
-    // Determine total carbs
-    const totalCarbs = carbEntries.reduce((total, entry) => total + entry.carbs, 0);
-    
-    // Create final meal data object
-    const finalMealData = {
-      carbs: totalCarbs,
-      nsCarbs: totalCarbs,
-      bwCarbs: 0,
-      journalCarbs: 0,
-      mealCOB: Math.max(mealData.mealCOB || 0, manualCOB),
-      COB: manualCOB,
-      currentDeviation: mealData.currentDeviation || 0,
-      maxDeviation: mealData.maxDeviation || 0,
-      minDeviation: mealData.minDeviation || 0,
-      myMealCOB: manualCOB,
-      myCarbsAbsorbed: myCarbsAbsorbed,
-      lastCarbTime: lastCarbEntry 
-        ? lastCarbEntry.timestamp 
-        : new Date().toISOString()
-    };
-    
-    logger.info('Meal data calculated', {
-      carbs: finalMealData.carbs,
-      COB: finalMealData.COB,
-      myMealCOB: finalMealData.myMealCOB,
-      myCarbsAbsorbed: finalMealData.myCarbsAbsorbed,
-      lastCarbTime: finalMealData.lastCarbTime
-    });
-    
-    return finalMealData;
-  } catch (error) {
-    logger.error('Unexpected error in meal calculation', {
-      message: error.message,
-      name: error.name,
-      stack: error.stack
-    });
-    
-    // Return a safe default if all calculations fail
     return {
       carbs: 0,
       nsCarbs: 0,
       bwCarbs: 0,
       journalCarbs: 0,
       mealCOB: 0,
-      COB: 0,
       currentDeviation: 0,
       maxDeviation: 0,
       minDeviation: 0,
-      myMealCOB: 0,
-      myCarbsAbsorbed: 0,
-      lastCarbTime: new Date().toISOString()
+      lastCarbTime: 0
     };
   }
-};
 
-module.exports = {
-  calculateMeal
-};
+  return {
+    calculateMeal,
+    createDefaultMeal
+  };
+}
+
+module.exports = { createMealCalculations };

@@ -1,4 +1,6 @@
 // utils/logger.js
+require('dotenv').config();
+
 /**
  * Simple logger with consistent formatting
  */
@@ -22,7 +24,7 @@ const logger = {
   },
   
   debug: (message, data = null) => {
-    if (process.env.DEBUG) {
+    if (process.env.LOG_LEVEL === 'debug') {
       console.log(`[DEBUG] ${message}${data ? ': ' + JSON.stringify(data) : ''}`);
     }
   },
@@ -39,4 +41,4 @@ const logger = {
   }
 };
 
-module.exports = { logger };
+module.exports = logger;

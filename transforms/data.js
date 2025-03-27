@@ -1,181 +1,130 @@
 // transforms/data.js
-const { logger } = require('../utils/logger');
-const { processProfile } = require('./profile');
+const logger = require('../utils/logger');
 
 /**
- * Fetch all required data for loop execution
- * @param {Object} nsClient - Nightscout client
- * @param {Object} config - Configuration
- * @returns {Promise<Object>} - Complete state object
+ * Creates functions for transforming data between Nightscout and OpenAPS formats
+ * @returns {Object} - Data transformation functions
  */
-const fetchLoopData = async (nsClient, config) => {
-  const state = {
-    timestamp: new Date().toISOString(),
-    clock: new Date().toISOString()
-  };
-  
-  try {
-    // Process profile (assuming it's already fetched in mpc.js)
-    if (config.profile) {
-      state.profile = processProfile(config.profile, config.defaultProfile);
-    } else {
-      // Fallback in case profile wasn't passed
-      logger.info('Fetching profile from Nightscout');
-      const nsProfile = await nsClient.getProfile();
-      state.profile = processProfile(nsProfile, config.defaultProfile);
+function createDataTransforms() {
+  /**
+   * Transform Nightscout CGM entries to the format expected by OpenAPS
+   * @param {Array} entries - Raw Nightscout CGM entries
+   * @returns {Array} - Formatted CGM data
+   */
+  function formatCGMData(entries) {
+    if (!entries || !Array.isArray(entries)) {
+      logger.warn('Invalid CGM entries data received');
+      return [];
     }
     
-    // Fetch glucose data (24 hours for autosens, recent for loop)
-    logger.info('Fetching glucose readings');
-    const allGlucose = await nsClient.getEntries(24);
-    state.glucose = allGlucose;
+    logger.debug(`Formatting ${entries.length} CGM entries`);
     
-    // Fetch pump history (24 hours for IOB calculations)
-    logger.info('Fetching pump history');
-    const treatments = await nsClient.getTreatments(24);
-    
-    // Process treatments into pump history format
-    const { pumpHistory, carbHistory } = processTreatments(treatments);
-    state.pumpHistory = pumpHistory;
-    state.carbHistory = carbHistory;
-    
-    // Add preferences to state
-    state.preferences = config.preferences || {};
-    
-    logger.info('All data fetched successfully');
-    return state;
-  } catch (error) {
-    logger.error('Error fetching loop data:', error);
-    throw error;
+    // Convert to format expected by oref0 and mark as fakecgm
+    return entries.map(entry => ({
+      sgv: entry.sgv,
+      date: entry.date,
+      dateString: entry.dateString,
+      direction: entry.direction,
+      type: entry.type || 'sgv',
+      device: "fakecgm" // Add this to bypass the flat CGM check
+    }));
   }
-};
 
-/**
- * Process Nightscout treatments into pump history format
- * @param {Array} treatments - Nightscout treatments
- * @returns {Object} - Formatted pump history and carb history
- */
-const processTreatments = (treatments) => {
-  // Filter to recent treatments only (last 24 hours)
-  const oneDayAgo = new Date();
-  oneDayAgo.setDate(oneDayAgo.getDate() - 1);
-  const recentTreatments = treatments.filter(t => 
-    new Date(t.created_at) >= oneDayAgo
-  );
-
-  // Convert to pump history format
-  const pumpHistory = [];
-  const carbHistory = [];
-
-  recentTreatments.forEach(treatment => {
-    const timestamp = treatment.created_at || treatment.timestamp || new Date().toISOString();
-    const dateNum = new Date(timestamp).getTime();
-
-    // Convert bolus treatments
-    if (treatment.insulin && ['Bolus', 'Meal Bolus', 'Snack Bolus', 'Correction Bolus', 'SMB'].includes(treatment.eventType)) {
-      pumpHistory.push({
-        _type: 'Bolus',
-        timestamp: timestamp,
-        amount: parseFloat(treatment.insulin),
-        programmed: parseFloat(treatment.insulin),
-        unabsorbed: 0,
-        duration: 0,
-        date: dateNum
-      });
+  /**
+   * Transform Nightscout treatments to pump history format expected by OpenAPS
+   * @param {Array} treatments - Raw Nightscout treatments
+   * @param {number} hoursBack - Number of hours to look back
+   * @returns {Object} - Object with pumpHistory and carbHistory arrays
+   */
+  function formatPumpHistory(treatments, hoursBack = 24) {
+    if (!treatments || !Array.isArray(treatments)) {
+      logger.warn('Invalid treatments data received');
+      return { pumpHistory: [], carbHistory: [] };
     }
+    
+    logger.debug(`Formatting ${treatments.length} treatments into pump history`);
+    
+    // Filter to the specified hours only
+    const timeBack = new Date();
+    timeBack.setHours(timeBack.getHours() - hoursBack);
+    const recentTreatments = treatments.filter(t => new Date(t.created_at) >= timeBack);
+    
+    logger.debug(`Found ${recentTreatments.length} treatments in the last ${hoursBack} hours`);
 
-    // Convert temp basals
-    if (treatment.eventType === 'Temp Basal') {
-      // TempBasal entry
-      pumpHistory.push({
-        _type: 'TempBasal',
-        timestamp: timestamp,
-        rate: parseFloat(treatment.rate || treatment.absolute),
-        temp: 'absolute',
-        date: dateNum
-      });
+    // Convert Nightscout treatments to pump history format
+    const pumpHistory = [];
+    const carbHistory = [];
 
-      // TempBasalDuration entry
-      pumpHistory.push({
-        _type: 'TempBasalDuration',
-        timestamp: timestamp,
-        'duration (min)': parseInt(treatment.duration),
-        date: dateNum
-      });
-    }
+    recentTreatments.forEach(treatment => {
+      const timestamp = treatment.created_at || treatment.timestamp || new Date().toISOString();
+      const dateNum = new Date(timestamp).getTime();
 
-    // Convert carb entries
-    if (treatment.carbs) {
-      const carbEntry = {
-        _type: 'Meal',
-        timestamp: timestamp,
-        carbs: parseInt(treatment.carbs),
-        created_at: timestamp,
-        date: dateNum
-      };
+      // Convert bolus treatments
+      if (treatment.insulin && 
+          (treatment.eventType === 'Bolus' || 
+           treatment.eventType === 'Meal Bolus' || 
+           treatment.eventType === 'Snack Bolus' || 
+           treatment.eventType === 'Correction Bolus' || 
+           treatment.eventType === 'SMB')) {
+        
+        pumpHistory.push({
+          _type: 'Bolus',
+          timestamp: timestamp,
+          amount: parseFloat(treatment.insulin),
+          programmed: parseFloat(treatment.insulin),
+          unabsorbed: 0,
+          duration: 0,
+          date: dateNum
+        });
+      }
+    
+      // Convert temp basals
+      if (treatment.eventType === 'Temp Basal') {
+        // TempBasal entry
+        pumpHistory.push({
+          _type: 'TempBasal',
+          timestamp: timestamp,
+          rate: parseFloat(treatment.rate || treatment.absolute),
+          temp: 'absolute',
+          date: dateNum
+        });
 
-      pumpHistory.push(carbEntry);
-      carbHistory.push(carbEntry);
-    }
-  });
+        // TempBasalDuration entry
+        pumpHistory.push({
+          _type: 'TempBasalDuration',
+          timestamp: timestamp,
+          'duration (min)': parseInt(treatment.duration),
+          date: dateNum
+        });
+      }
 
-  // Sort pump history by date, most recent first
-  pumpHistory.sort((a, b) => b.date - a.date);
+      // Convert carb entries
+      if (treatment.carbs) {
+        const carbEntry = {
+          _type: 'Meal',
+          timestamp: timestamp,
+          carbs: parseInt(treatment.carbs),
+          created_at: timestamp,
+          date: dateNum
+        };
 
-  logger.info(`Processed ${pumpHistory.length} pump history records`);
-  return { pumpHistory, carbHistory };
-};
-
-/**
- * Get current temp basal status
- * @param {Array} pumpHistory - Pump history array
- * @param {number} defaultBasal - Default basal rate
- * @returns {Object} - Current temp basal status
- */
-const getCurrentTempBasal = (pumpHistory, defaultBasal) => {
-  // Find the most recent temp basal
-  const tempBasals = pumpHistory.filter(entry => entry._type === 'TempBasal');
-  
-  if (tempBasals.length === 0) {
+        pumpHistory.push(carbEntry);
+        carbHistory.push(carbEntry);
+      }
+    });
+    
+    logger.debug(`Converted ${pumpHistory.length} pump history records and ${carbHistory.length} carb entries`);
+    
     return {
-      duration: 0,
-      rate: 0,
-      temp: 'absolute',
-      timestamp: new Date().toISOString()
+      pumpHistory,
+      carbHistory
     };
   }
-  
-  // Sort by date, most recent first (should already be sorted)
-  tempBasals.sort((a, b) => b.date - a.date);
-  const latestTempBasal = tempBasals[0];
-  
-  // Find corresponding duration entry
-  const durationEntry = pumpHistory.find(entry => 
-    entry._type === 'TempBasalDuration' && 
-    entry.timestamp === latestTempBasal.timestamp
-  );
-  
-  // Calculate remaining duration
-  let remainingDuration = 0;
-  if (durationEntry) {
-    const durationMinutes = durationEntry['duration (min)'] || 0;
-    const startTime = new Date(latestTempBasal.timestamp).getTime();
-    const currentTime = new Date().getTime();
-    const elapsedMinutes = Math.floor((currentTime - startTime) / 60000);
-    
-    remainingDuration = Math.max(0, durationMinutes - elapsedMinutes);
-  }
-  
-  return {
-    duration: remainingDuration,
-    rate: latestTempBasal.rate || defaultBasal,
-    temp: 'absolute',
-    timestamp: latestTempBasal.timestamp
-  };
-};
 
-module.exports = {
-  fetchLoopData,
-  processTreatments,
-  getCurrentTempBasal
-};
+  return {
+    formatCGMData,
+    formatPumpHistory
+  };
+}
+
+module.exports = { createDataTransforms };

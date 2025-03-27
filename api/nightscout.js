@@ -1,225 +1,146 @@
-const fetch = require('node-fetch');
-const { logger } = require('../utils/logger');
+// api/nightscout.js
+const axios = require('axios');
+const logger = require('../utils/logger');
 
 /**
- * Creates a client for interacting with Nightscout API
- * @param {Object} config - Nightscout configuration
- * @returns {Object} - Object with Nightscout API methods
+ * Creates a Nightscout API client with the given configuration
+ * @param {Object} config - Configuration object
+ * @param {string} config.url - Nightscout URL
+ * @param {string} config.apiSecret - API secret for Nightscout
+ * @returns {Object} - Functions for interacting with Nightscout
  */
-const createNightscoutClient = (config) => {
-  const baseURL = config.url;
-  const token = config.api_secret || '';
-  const headers = token ? { 'api-secret': token } : {};
+function createNightscoutClient(config) {
+  const baseUrl = config.url;
+  const apiSecret = config.apiSecret;
   
-/**
- * Make an HTTP request to Nightscout API
- * @param {string} endpoint - API endpoint
- * @param {Object} options - Fetch options
- * @returns {Promise<any>} - Parsed response data
- */
-const makeRequest = async (endpoint, options = {}) => {
-  const url = `${baseURL}${endpoint}`;
-  const fetchOptions = {
-    headers,
-    timeout: 10000,
-    ...options
-  };
-  
-  try {
-    const response = await fetch(url, fetchOptions);
-    
-    if (!response.ok) {
-      throw new Error(`HTTP error ${response.status}: ${response.statusText}`);
+  const client = axios.create({
+    baseURL: baseUrl,
+    headers: {
+      'API-SECRET': apiSecret,
+      'Content-Type': 'application/json'
     }
-    
-    // First get the response as text
-    const text = await response.text();
-    
-    // Custom parsing for entries endpoint
-    if (endpoint.includes('/entries')) {
-      try {
-        // Try to parse as JSON first (for normal cases)
-        return JSON.parse(text);
-      } catch (jsonParseError) {
-        // If JSON parsing fails, attempt to construct JSON manually
-        const entries = parseEntriesFromText(text);
-        if (entries.length > 0) {
-          return entries;
-        }
-        
-        // If parsing fails, log the error and rethrow
-        logger.error(`Custom parsing failed for ${url}:`, text);
-        throw jsonParseError;
+  });
+
+  logger.info(`Initializing Nightscout client for ${baseUrl}`);
+
+  /**
+   * Get CGM entries from Nightscout
+   * @param {number} count - Number of entries to retrieve
+   * @returns {Promise<Array>} - CGM entries
+   */
+  async function getEntries(count = 144) { // 24 hours of 5-min CGM data
+    try {
+      logger.debug(`Fetching ${count} entries from Nightscout`);
+      const response = await client.get(`/api/v1/entries.json?count=${count}`);
+      logger.debug(`Received ${response.data.length} entries from Nightscout`);
+      
+      // Log a sample of the data
+      if (response.data.length > 0) {
+        logger.debug(`Sample entry: ${JSON.stringify(response.data[0])}`);
       }
+      
+      return response.data;
+    } catch (error) {
+      logger.error(`Error fetching entries from Nightscout: ${error.message}`);
+      throw error;
     }
-    
-    // For other endpoints, use standard JSON parsing
-    return JSON.parse(text);
-  } catch (error) {
-    logger.error(`Error making request to ${url}:`, error);
-    throw error;
   }
-};
-
-/**
- * Parse entries from raw text response
- * @param {string} text - Raw text response
- * @returns {Array} - Parsed entries
- */
-const parseEntriesFromText = (text) => {
-  // Split the text into lines
-  const lines = text.trim().split('\n');
-  
-  // Parse each line into an entry
-  const entries = lines.map(line => {
-    // Split the line by tabs or multiple spaces
-    const parts = line.trim().split(/\s+/);
-    
-    // Ensure we have enough parts to create an entry
-    if (parts.length >= 4) {
-      return {
-        dateString: parts[0].replace(/"/g, ''),
-        date: parseInt(parts[1]),
-        sgv: parseInt(parts[2]),
-        direction: parts[3].replace(/"/g, '')
-      };
-    }
-    
-    return null;
-  }).filter(entry => entry !== null);
-  
-  return entries;
-};
-  
-  /**
-   * Fetch glucose readings from Nightscout
-   * @param {number} hours - Number of hours of data to fetch
-   * @returns {Promise<Array>} - Array of glucose readings
-   */
-  const getEntries = async (hours = 24) => {
-    try {
-      // Calculate count based on 5-minute intervals
-      // 12 readings per hour × requested hours
-      const count = Math.ceil(12 * hours);
-      
-      const data = await makeRequest(`/api/v1/entries?count=${count}`);
-      
-      // Convert to format expected by oref0 and mark as fakecgm
-      const formattedEntries = data.map(entry => ({
-        sgv: entry.sgv,
-        date: entry.date,
-        dateString: entry.dateString,
-        direction: entry.direction,
-        type: entry.type || 'sgv',
-        device: "fakecgm" // Add this to bypass the flat CGM check
-      }));
-      
-      logger.info(`Fetched ${formattedEntries.length} glucose readings (${hours} hours)`);
-      return formattedEntries;
-    } catch (error) {
-      logger.error('Error fetching CGM data:', error);
-      return [];
-    }
-  };
 
   /**
-   * Fetch recent treatments from Nightscout
-   * @param {number} hours - Number of hours of treatments to fetch
-   * @returns {Promise<Array>} - Array of treatments
+   * Get treatments from Nightscout
+   * @param {number} count - Number of treatments to retrieve
+   * @returns {Promise<Array>} - Treatments
    */
-  const getTreatments = async (hours = 24) => {
+  async function getTreatments(count = 288) {
     try {
-      // Calculate milliseconds for the time window
-      const timeWindowMs = hours * 60 * 60 * 1000;
-      const endDate = new Date().getTime();
-      const startDate = endDate - timeWindowMs;
+      logger.debug(`Fetching ${count} treatments from Nightscout`);
+      const response = await client.get(`/api/v1/treatments.json?count=${count}`);
+      logger.debug(`Received ${response.data.length} treatments from Nightscout`);
       
-      const data = await makeRequest(`/api/v1/treatments?find[created_at][$gte]=${new Date(startDate).toISOString()}`);
-      logger.info(`Fetched ${data.length} treatments from the last ${hours} hours`);
-      return data;
-    } catch (error) {
-      logger.error('Error fetching treatments:', error);
-      return [];
-    }
-  };
-  
-  /**
-   * Fetch current profile from Nightscout
-   * @returns {Promise<Object|null>} - Profile object or null if not found
-   */
-  const getProfile = async () => {
-    try {
-      logger.info('Fetching profile from Nightscout');
-      const data = await makeRequest('/api/v1/profile');
-      
-      if (!data || !data[0] || !data[0].store) {
-        logger.warn('Invalid or missing Nightscout profile, using defaults');
-        return null;
+      // Log a sample of the data
+      if (response.data.length > 0) {
+        logger.debug(`Sample treatment: ${JSON.stringify(response.data[0])}`);
       }
       
-      logger.info('Successfully fetched profile from Nightscout');
-      return data[0];
+      return response.data;
     } catch (error) {
-      logger.error('Error fetching profile from Nightscout:', error);
-      return null;
+      logger.error(`Error fetching treatments from Nightscout: ${error.message}`);
+      throw error;
     }
-  };
+  }
 
   /**
    * Upload treatments to Nightscout
-   * @param {Array} treatments - Array of treatment objects
-   * @returns {Promise<Object>} - Upload response
+   * @param {Array} treatments - Treatments to upload
+   * @returns {Promise<Object>} - Response from Nightscout
    */
-  const uploadTreatments = async (treatments) => {
+  async function uploadTreatments(treatments) {
     try {
-      const data = await makeRequest('/api/v1/treatments', {
-        method: 'POST',
-        headers: {
-          ...headers,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(treatments)
-      });
+      logger.debug(`Uploading ${treatments.length} treatments to Nightscout`);
+      logger.debug(`Sample treatment being uploaded: ${JSON.stringify(treatments[0])}`);
       
-      logger.info(`Uploaded ${treatments.length} treatments to Nightscout`);
-      return data;
+      const response = await client.post('/api/v1/treatments', treatments);
+      logger.debug(`Successfully uploaded treatments to Nightscout`);
+      
+      return response.data;
     } catch (error) {
-      logger.error('Error uploading treatments:', error);
+      logger.error(`Error uploading treatments to Nightscout: ${error.message}`);
       throw error;
     }
-  };
+  }
 
   /**
-   * Upload device status to Nightscout
-   * @param {Array} deviceStatuses - Array of device status objects
-   * @returns {Promise<Object>} - Upload response
+   * Get profile from Nightscout
+   * @returns {Promise<Object>} - Profile from Nightscout
    */
-  const uploadDeviceStatus = async (deviceStatuses) => {
+  async function getProfile() {
     try {
-      const data = await makeRequest('/api/v1/devicestatus', {
-        method: 'POST',
-        headers: {
-          ...headers,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(deviceStatuses)
-      });
+      logger.debug('Fetching profile from Nightscout');
+      const response = await client.get('/api/v1/profile.json');
       
-      logger.info(`Uploaded ${deviceStatuses.length} device status(es) to Nightscout`);
-      return data;
+      if (response.data && response.data.length > 0) {
+        logger.debug(`Successfully retrieved profile from Nightscout`);
+        logger.debug(`Profile keys: ${Object.keys(response.data[0]).join(', ')}`);
+        
+        // Log store section if it exists
+        if (response.data[0].store) {
+          const storeKeys = Object.keys(response.data[0].store);
+          logger.debug(`Profile store keys: ${storeKeys.join(', ')}`);
+          
+          // Log a sample profile if available
+          if (storeKeys.length > 0) {
+            const sampleProfileName = storeKeys[0];
+            const sampleProfile = response.data[0].store[sampleProfileName];
+            logger.debug(`Sample profile (${sampleProfileName}) keys: ${Object.keys(sampleProfile).join(', ')}`);
+            
+            // Log some important profile values
+            if (sampleProfile) {
+              logger.debug(`DIA: ${sampleProfile.dia}`);
+              logger.debug(`Basal settings: ${JSON.stringify(sampleProfile.basal)}`);
+              logger.debug(`ISF settings: ${JSON.stringify(sampleProfile.sens)}`);
+              logger.debug(`Carb ratio settings: ${JSON.stringify(sampleProfile.carbratio)}`);
+              logger.debug(`Units: ${sampleProfile.units}`);
+            }
+          }
+        }
+        
+        return response.data[0];
+      } else {
+        logger.warn('Empty or invalid profile returned from Nightscout');
+        return null;
+      }
     } catch (error) {
-      logger.error('Error uploading device status:', error);
+      logger.error(`Error fetching profile from Nightscout: ${error.message}`);
       throw error;
     }
-  };
-  
+  }
+
   return {
     getEntries,
     getTreatments,
-    getProfile,
     uploadTreatments,
-    uploadDeviceStatus
+    getProfile
   };
-};
+}
 
 module.exports = { createNightscoutClient };
