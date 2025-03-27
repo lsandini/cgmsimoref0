@@ -27,6 +27,7 @@ function createDeviceStatusAPI(nightscoutClient) {
         });
       });
   
+      // Use the nightscoutClient's uploadDeviceStatus method
       return await nightscoutClient.uploadDeviceStatus(deviceStatuses);
     } catch (error) {
       logger.error(`Error uploading device status to Nightscout: ${error.message}`);
@@ -55,9 +56,9 @@ function createDeviceStatusAPI(nightscoutClient) {
     const now = new Date();
     const mills = now.getTime();
     const timeString = now.toISOString();
-    
+        
     // Use iobData with fallbacks if needed
-    const iobData = data.iob[0] || {
+    const iobData = data.iob && data.iob.length > 0 ? data.iob[0] : {
       iob: 0,
       activity: 0,
       basaliob: 0,
@@ -75,10 +76,32 @@ function createDeviceStatusAPI(nightscoutClient) {
     // Track fallback usage 
     let fallbacksUsed = [];
     
-    // Get current basal rate with fallback
-    const current_basal = data.profile?.current_basal || fallbacks.current_basal;
-    if (current_basal === fallbacks.current_basal) {
+    // Get current basal rate - check if we actually have to use a fallback
+    const hasCurrent_basal = data.current_basal !== undefined || data.profile?.current_basal !== undefined;
+    const current_basal = data.current_basal || data.profile?.current_basal || fallbacks.current_basal;
+    if (!hasCurrent_basal) {
       fallbacksUsed.push('current_basal');
+    }
+    
+    // Get ISF - check if we actually have to use a fallback
+    const hasSens = data.sens !== undefined || data.profile?.sens !== undefined;
+    const isf = data.sens || data.profile?.sens || fallbacks.sens;
+    if (!hasSens) {
+      fallbacksUsed.push('sens');
+    }
+    
+    // Get carb ratio - check if we actually have to use a fallback
+    const hasCarb_ratio = data.carb_ratio !== undefined || data.profile?.carb_ratio !== undefined;
+    const carb_ratio = data.carb_ratio || data.profile?.carb_ratio || fallbacks.carb_ratio;
+    if (!hasCarb_ratio) {
+      fallbacksUsed.push('carb_ratio');
+    }
+    
+    // Get target BG - check if we actually have to use a fallback
+    const hasMin_bg = data.min_bg !== undefined || data.profile?.min_bg !== undefined;
+    const target_bg = data.min_bg || data.profile?.min_bg || fallbacks.min_bg;
+    if (!hasMin_bg) {
+      fallbacksUsed.push('min_bg');
     }
     
     // Create a complete iob object with no undefined values
@@ -135,24 +158,6 @@ function createDeviceStatusAPI(nightscoutClient) {
     
     // Get current COB
     const COB = Math.round(data.meal?.mealCOB || 0);
-    
-    // Get ISF with fallback
-    const isf = data.profile?.sens || fallbacks.sens;
-    if (isf === fallbacks.sens) {
-      fallbacksUsed.push('sens');
-    }
-    
-    // Get carb ratio with fallback
-    const carb_ratio = data.profile?.carb_ratio || fallbacks.carb_ratio;
-    if (carb_ratio === fallbacks.carb_ratio) {
-      fallbacksUsed.push('carb_ratio');
-    }
-    
-    // Get target BG with fallback
-    const target_bg = data.profile?.min_bg || fallbacks.min_bg;
-    if (target_bg === fallbacks.min_bg) {
-      fallbacksUsed.push('min_bg');
-    }
     
     // Log fallback usage if any
     if (fallbacksUsed.length > 0) {

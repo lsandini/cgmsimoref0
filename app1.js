@@ -78,6 +78,7 @@ async function main() {
     
     // Add preferences to profile
     const profileWithPrefs = profileTransforms.addPreferencesToProfile(openAPSProfile, config.preferences);
+    console.log('@@ profileWithPrefs: ',profileWithPrefs);
     
     logger.info('Profile transformation complete');
     
@@ -252,29 +253,32 @@ async function main() {
     
     // Create and upload device status
     try {
-      logger.info('Preparing device status for upload');
-      
-      // Create the data structure needed by deviceStatus
-      const loopData = {
-        glucose: formattedCGMData,
-        iob: iobData,
-        meal: mealData,
-        profile: profileWithPrefs,
-        autosens: autosensData
-      };
-      
-      // Create device status
-      const deviceStatus = deviceStatusAPI.createDeviceStatus(
-        loopData,
+        logger.info('Preparing device status for upload');
+        
+        // Create device status with directly accessible profile values
+        const deviceStatus = deviceStatusAPI.createDeviceStatus(
+        {
+            glucose: formattedCGMData,
+            iob: iobData,
+            meal: mealData,
+            // Add profile values directly at the top level
+            current_basal: profileWithPrefs.current_basal,
+            sens: profileWithPrefs.sens,
+            carb_ratio: profileWithPrefs.carb_ratio,
+            min_bg: profileWithPrefs.min_bg,
+            // Also keep the full profile for other properties
+            profile: profileWithPrefs,
+            autosens: autosensData
+        },
         basalRecommendation,
         config.preferences
-      );
-      
-      logger.info('Uploading device status to Nightscout');
-      await deviceStatusAPI.uploadDeviceStatus([deviceStatus]);
-      logger.info('Device status uploaded successfully');
+        );
+        
+        logger.info('Uploading device status to Nightscout');
+        await deviceStatusAPI.uploadDeviceStatus([deviceStatus]);
+        logger.info('Device status uploaded successfully');
     } catch (error) {
-      logger.error(`Failed to upload device status: ${error.message}`);
+        logger.error(`Failed to upload device status: ${error.message}`);
     }
     
     logger.info('Loop iteration completed successfully');
