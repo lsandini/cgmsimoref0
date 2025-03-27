@@ -3,10 +3,10 @@ const logger = require('../utils/logger');
 
 /**
  * Creates functions for handling treatments
- * @param {Object} client - Nightscout client
+ * @param {Object} nightscoutClient - Nightscout client
  * @returns {Object} - Functions for treatment operations
  */
-function createTreatmentsAPI(client) {
+function createTreatmentsAPI(nightscoutClient) {
   /**
    * Upload treatments to Nightscout
    * @param {Array} treatments - Treatments to upload
@@ -20,10 +20,7 @@ function createTreatmentsAPI(client) {
         logger.debug(`Sample treatment being uploaded: ${JSON.stringify(treatments[0])}`);
       }
       
-      const response = await client.post('/api/v1/treatments', treatments);
-      logger.debug(`Successfully uploaded treatments to Nightscout`);
-      
-      return response.data;
+      return await nightscoutClient.uploadTreatments(treatments);
     } catch (error) {
       logger.error(`Error uploading treatments to Nightscout: ${error.message}`);
       throw error;

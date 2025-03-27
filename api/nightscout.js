@@ -3,7 +3,7 @@ const axios = require('axios');
 const logger = require('../utils/logger');
 
 /**
- * Creates a Nightscout API client with the given configuration
+ * Creates a Nightscout client with the given configuration
  * @param {Object} config - Configuration object
  * @param {string} config.url - Nightscout URL
  * @param {string} config.apiSecret - API secret for Nightscout
@@ -13,7 +13,7 @@ function createNightscoutClient(config) {
   const baseUrl = config.url;
   const apiSecret = config.apiSecret;
   
-  const client = axios.create({
+  const axiosClient = axios.create({
     baseURL: baseUrl,
     headers: {
       'API-SECRET': apiSecret,
@@ -31,7 +31,7 @@ function createNightscoutClient(config) {
   async function getEntries(count = 144) { // 24 hours of 5-min CGM data
     try {
       logger.debug(`Fetching ${count} entries from Nightscout`);
-      const response = await client.get(`/api/v1/entries.json?count=${count}`);
+      const response = await axiosClient.get(`/api/v1/entries.json?count=${count}`);
       logger.debug(`Received ${response.data.length} entries from Nightscout`);
       
       // Log a sample of the data
@@ -54,7 +54,7 @@ function createNightscoutClient(config) {
   async function getTreatments(count = 288) {
     try {
       logger.debug(`Fetching ${count} treatments from Nightscout`);
-      const response = await client.get(`/api/v1/treatments.json?count=${count}`);
+      const response = await axiosClient.get(`/api/v1/treatments.json?count=${count}`);
       logger.debug(`Received ${response.data.length} treatments from Nightscout`);
       
       // Log a sample of the data
@@ -79,7 +79,7 @@ function createNightscoutClient(config) {
       logger.debug(`Uploading ${treatments.length} treatments to Nightscout`);
       logger.debug(`Sample treatment being uploaded: ${JSON.stringify(treatments[0])}`);
       
-      const response = await client.post('/api/v1/treatments', treatments);
+      const response = await axiosClient.post('/api/v1/treatments', treatments);
       logger.debug(`Successfully uploaded treatments to Nightscout`);
       
       return response.data;
@@ -96,7 +96,7 @@ function createNightscoutClient(config) {
   async function getProfile() {
     try {
       logger.debug('Fetching profile from Nightscout');
-      const response = await client.get('/api/v1/profile.json');
+      const response = await axiosClient.get('/api/v1/profile.json');
       
       if (response.data && response.data.length > 0) {
         logger.debug(`Successfully retrieved profile from Nightscout`);
@@ -135,11 +135,42 @@ function createNightscoutClient(config) {
     }
   }
 
+  /**
+   * Upload device status to Nightscout
+   * @param {Array} deviceStatuses - Device statuses to upload
+   * @returns {Promise<Object>} - Response from Nightscout
+   */
+  async function uploadDeviceStatus(deviceStatuses) {
+    try {
+      logger.debug(`Uploading ${deviceStatuses.length} device statuses to Nightscout`);
+      
+      // Log detailed information about each deviceStatus
+      deviceStatuses.forEach((status, index) => {
+        logger.debug(`Device Status ${index + 1}:`, {
+          totalIOB: status.openaps?.iob?.iob,
+          basalIOB: status.openaps?.iob?.basaliob,
+          bolusIOB: status.openaps?.iob?.bolusiob,
+          pumpBasalIOB: status.openaps?.iob?.pumpBasalIOB,
+          time: status.openaps?.iob?.time
+        });
+      });
+  
+      const response = await axiosClient.post('/api/v1/devicestatus', deviceStatuses);
+      logger.debug('Successfully uploaded device status to Nightscout');
+      
+      return response.data;
+    } catch (error) {
+      logger.error(`Error uploading device status to Nightscout: ${error.message}`);
+      throw error;
+    }
+  }
+
   return {
     getEntries,
     getTreatments,
     uploadTreatments,
-    getProfile
+    getProfile,
+    uploadDeviceStatus
   };
 }
 

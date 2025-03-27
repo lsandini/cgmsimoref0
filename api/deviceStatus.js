@@ -3,10 +3,10 @@ const logger = require('../utils/logger');
 
 /**
  * Creates functions for handling device status
- * @param {Object} client - Nightscout client
+ * @param {Object} nightscoutClient - Nightscout client
  * @returns {Object} - Functions for device status operations
  */
-function createDeviceStatusAPI(client) {
+function createDeviceStatusAPI(nightscoutClient) {
   /**
    * Upload device status to Nightscout
    * @param {Array} deviceStatuses - Device statuses to upload
@@ -27,10 +27,7 @@ function createDeviceStatusAPI(client) {
         });
       });
   
-      const response = await client.post('/api/v1/devicestatus', deviceStatuses);
-      logger.debug('Successfully uploaded device status to Nightscout');
-      
-      return response.data;
+      return await nightscoutClient.uploadDeviceStatus(deviceStatuses);
     } catch (error) {
       logger.error(`Error uploading device status to Nightscout: ${error.message}`);
       throw error;
