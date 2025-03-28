@@ -283,12 +283,23 @@ async function main() {
     
     logger.info('Loop iteration completed successfully');
     
-    // Log critical profile settings
-    logger.info('Critical profile settings:');
+    // Log critical profile settings with autosens adjustments
+    logger.info('Critical profile settings (as used in calculations):');
     logger.info(`- DIA: ${profileWithPrefs.dia}`);
-    logger.info(`- ISF: ${profileWithPrefs.sens} mg/dL/U`);
+
+    // Show both original and autosens-adjusted ISF
+    const autosensRatio = autosensData?.ratio || 1.0;
+    const adjustedISF = Math.round(profileWithPrefs.sens / autosensRatio);
+    logger.info(`- ISF: ${adjustedISF} mg/dL/U (original: ${profileWithPrefs.sens} mg/dL/U with autosens: ${autosensRatio.toFixed(2)})`);
+
+    // Show carb ratio
     logger.info(`- Carb Ratio: ${profileWithPrefs.carb_ratio} g/U`);
-    logger.info(`- Basal Rate: ${profileWithPrefs.current_basal} U/hr`);
+
+    // Show both original and autosens-adjusted basal
+    const adjustedBasal = (profileWithPrefs.current_basal * autosensRatio).toFixed(2);
+    logger.info(`- Basal Rate: ${adjustedBasal} U/hr (original: ${profileWithPrefs.current_basal} U/hr)`);
+
+    // Show target range
     logger.info(`- Target Range: ${profileWithPrefs.min_bg}-${profileWithPrefs.max_bg} mg/dL`);
     
     return {

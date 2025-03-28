@@ -16,9 +16,9 @@
 "maxSMBBasalMinutes": 30,
 "maxUAMSMBBasalMinutes": 30, 
 "exercise_mode":false,
-"sensitivity_raises_target":false,
-"resistance_lowers_target":false,
-"autosens_adjust_targets":false,
+"sensitivity_raises_target":true,
+"resistance_lowers_target":true,
+"autosens_adjust_targets":true,
 "min_5m_carbimpact": 8,
 "remainingCarbsCap": 90,
 "maxCOB": 120

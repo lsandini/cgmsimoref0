@@ -1,5 +1,5 @@
 #!/bin/bash
 
 git add .
-git commit -m "enableSMB_always = false, maxSMBBasalMinutes: 30"
+git commit -m "better logging"
 git push -u origin functional
