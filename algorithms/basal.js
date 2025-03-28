@@ -347,9 +347,9 @@ function createBasalCalculations() {
         received: true
       };
       
-      // Check if we need to set a temp basal
-      if (safeRecommendation.duration > 0 || safeRecommendation.rate !== data.profile.current_basal) {
-        // Create a new temp basal state
+      // Check if we need to set a temp basal or keep the current one
+      if (safeRecommendation.duration > 0) {
+        // Create a new temp basal with the specified duration and rate
         const newTempBasal = {
           duration: safeRecommendation.duration,
           rate: safeRecommendation.rate,
@@ -366,8 +366,19 @@ function createBasalCalculations() {
           enacted: enactedData,
           tempBasal: newTempBasal
         };
+      } else if (safeRecommendation.reason && 
+                (safeRecommendation.reason.includes(">~ req") || 
+                  safeRecommendation.reason.includes("=~ req") ||
+                  safeRecommendation.reason.includes("no temp required"))) {
+        // Algorithm indicates current temp is close enough or no change needed
+        logger.info('Keeping current temp basal based on algorithm recommendation');
+        
+        return {
+          enacted: false,
+          tempBasal: data.currentTemp
+        };
       } else {
-        // Cancel any existing temp basal
+        // Cancel any existing temp basal in other cases
         logger.info('Cancelling any existing temp basal');
         
         return {
