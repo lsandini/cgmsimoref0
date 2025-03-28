@@ -8,6 +8,7 @@ require('dotenv').config();
  * Load configuration from environment variables and JSON files
  * @returns {Promise<Object>} - Configuration object
  */
+// Load configuration from environment variables and JSON files
 async function loadConfig() {
   try {
     // Load preferences from preferences.json
@@ -22,25 +23,13 @@ async function loadConfig() {
       logger.warn('Using default preferences');
     }
 
-    // Load additional config from config.json if it exists
-    let additionalConfig = {};
-    try {
-      const configPath = path.join(__dirname, '..', 'config.json');
-      const configData = await fs.readFile(configPath, 'utf8');
-      additionalConfig = JSON.parse(configData);
-      logger.info('Loaded additional config from config.json');
-    } catch (error) {
-      logger.debug(`No additional config loaded: ${error.message}`);
-    }
-
-    // Combine environment variables with loaded config
+    // Combine environment variables with preferences
     const config = {
       nightscout: {
         url: process.env.NIGHTSCOUT_URL,
         apiSecret: process.env.API_SECRET
       },
-      preferences,
-      ...additionalConfig
+      preferences
     };
 
     // Validate required configuration
