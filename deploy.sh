@@ -1,5 +1,5 @@
 #!/bin/bash
 
 git add .
-git commit -m "total refactor successful version"
+git commit -m "enableSMB_always = false, maxSMBBasalMinutes: 30"
 git push -u origin functional
