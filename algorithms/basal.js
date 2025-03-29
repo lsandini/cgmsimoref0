@@ -4,10 +4,6 @@ const determine_basal = require('oref0/lib/determine-basal/determine-basal');
 const getLastGlucose = require('oref0/lib/glucose-get-last');
 const logger = require('../utils/logger');
 
-function roundBasal(rate) {
-  return Math.round(rate * 20) / 20; // Rounds to nearest 0.05
-}
-
 /**
  * Creates functions for basal rate calculations and adjustments
  * @returns {Object} - Functions for determining basal rates
@@ -205,6 +201,7 @@ function createBasalCalculations() {
         tempBasalFunctions,
         true // microBolusAllowed
       );
+      
       // Handle case where determine_basal returns null or undefined
       if (!determineBasalResult) {
         logger.error("determine-basal returned null or undefined");
@@ -221,8 +218,6 @@ function createBasalCalculations() {
       // Add missing fields when "doing nothing"
       if (determineBasalResult.rate === undefined) {
         determineBasalResult.rate = profile.current_basal; // Use current basal
-      } else {
-        determineBasalResult.rate = roundBasal(determineBasalResult.rate); // Round the rate
       }
       
       if (determineBasalResult.duration === undefined) {
@@ -275,9 +270,7 @@ function createBasalCalculations() {
           });
         }
       }
-
-      // Apply rounding to the final rate
-      determineBasalResult.rate = roundBasal(determineBasalResult.rate);
+      
       return determineBasalResult;
     } catch (error) {
       logger.error('Error determining basal', error);
@@ -341,7 +334,7 @@ function createBasalCalculations() {
       const safeRecommendation = {
         ...recommendation,
         rate: recommendation.rate !== undefined ? 
-          roundBasal(recommendation.rate) : roundBasal(data.profile.current_basal),
+          recommendation.rate : data.profile.current_basal,
         duration: recommendation.duration !== undefined ? 
           recommendation.duration : 0
       };
@@ -354,46 +347,38 @@ function createBasalCalculations() {
         received: true
       };
       
-      // First, check if recommendation says to do nothing
-      if (safeRecommendation.reason && 
-          (safeRecommendation.reason.includes("no temp required") ||
-          safeRecommendation.reason.includes(">~ req") ||
-          safeRecommendation.reason.includes("=~ req"))) {
-        logger.debug('Keeping current temp basal:', {
-          rate: data.currentTemp.rate + 'U/hr',
-          duration: data.currentTemp.duration + 'min'
-        });
-        logger.info('No temp change required, keeping current temp basal');
-        
-        // Return the current temp without changes
-        return {
-          enacted: false, // Important: mark as not enacted
-          tempBasal: data.currentTemp,
-          reason: "No change required to current temp basal"
-        };
-      }
-      
-      // Check if we need to set a temp basal
-      if (safeRecommendation.duration > 0 || safeRecommendation.rate !== roundBasal(data.profile.current_basal)) {
-        // Create a new temp basal state with rounded rate
+      // Check if we need to set a temp basal or keep the current one
+      if (safeRecommendation.duration > 0) {
+        // Create a new temp basal with the specified duration and rate
         const newTempBasal = {
           duration: safeRecommendation.duration,
-          rate: roundBasal(safeRecommendation.rate),
+          rate: safeRecommendation.rate,
           temp: 'absolute',
           timestamp: new Date().toISOString()
         };
         
         logger.info('Setting temp basal:', {
-          rate: newTempBasal.rate + 'U/hr',
-          duration: newTempBasal.duration + 'min'
+          rate: safeRecommendation.rate + 'U/hr',
+          duration: safeRecommendation.duration + 'min'
         });
         
         return {
           enacted: enactedData,
           tempBasal: newTempBasal
         };
+      } else if (safeRecommendation.reason && 
+                (safeRecommendation.reason.includes(">~ req") || 
+                  safeRecommendation.reason.includes("=~ req") ||
+                  safeRecommendation.reason.includes("no temp required"))) {
+        // Algorithm indicates current temp is close enough or no change needed
+        logger.info('Keeping current temp basal based on algorithm recommendation');
+        
+        return {
+          enacted: false,
+          tempBasal: data.currentTemp
+        };
       } else {
-        // Cancel any existing temp basal
+        // Cancel any existing temp basal in other cases
         logger.info('Cancelling any existing temp basal');
         
         return {

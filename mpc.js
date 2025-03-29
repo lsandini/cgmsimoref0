@@ -229,15 +229,13 @@ async function main() {
     }
     
     // Add temp basal if enacted
-    if (enactedData && enactedData.enacted === true && enactedData.tempBasal) {
+    if (enactedData && enactedData.tempBasal) {
       logger.info(`Uploading temp basal: ${enactedData.tempBasal.rate}U/hr for ${enactedData.tempBasal.duration} min`);
       const tempBasalTreatment = treatmentsAPI.createTempBasalTreatment(
         enactedData.tempBasal.rate,
         enactedData.tempBasal.duration
       );
       treatmentsToUpload.push(tempBasalTreatment);
-    } else if (enactedData && enactedData.enacted === false) {
-      logger.info('No temp basal change needed - not uploading to Nightscout');
     }
     
     // Upload treatments if any
