@@ -27,7 +27,7 @@ async function loadConfig() {
     const config = {
       nightscout: {
         url: process.env.NIGHTSCOUT_URL,
-        apiSecret: process.env.API_SECRET
+        apiSecret: process.env.APISECRET
       },
       preferences
     };
