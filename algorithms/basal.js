@@ -412,9 +412,9 @@ function createBasalCalculations() {
     if (microbolusMatch && microbolusMatch[1]) {
       const microbolusAmount = parseFloat(microbolusMatch[1]);
       
-      logger.info('Extracted SMB from recommendation:', {
-        amount: microbolusAmount + 'U'
-      });
+      // logger.info('Extracted SMB from recommendation:', {
+      //   amount: microbolusAmount + 'U'
+      // });
       
       return {
         amount: microbolusAmount,

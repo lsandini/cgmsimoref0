@@ -14,18 +14,18 @@ function createDeviceStatusAPI(nightscoutClient) {
    */
   async function uploadDeviceStatus(deviceStatuses) {
     try {
-      logger.debug(`Uploading ${deviceStatuses.length} device statuses to Nightscout`);
+      //logger.debug(`Uploading ${deviceStatuses.length} device statuses to Nightscout`);
       
       // Log detailed information about each deviceStatus
-      deviceStatuses.forEach((status, index) => {
-        logger.debug(`Device Status ${index + 1}:`, {
-          totalIOB: status.openaps?.iob?.iob,
-          basalIOB: status.openaps?.iob?.basaliob,
-          bolusIOB: status.openaps?.iob?.bolusiob,
-          pumpBasalIOB: status.openaps?.iob?.pumpBasalIOB,
-          time: status.openaps?.iob?.time
-        });
-      });
+      // deviceStatuses.forEach((status, index) => {
+      //   logger.debug(`Device Status ${index + 1}:`, {
+      //     totalIOB: status.openaps?.iob?.iob,
+      //     basalIOB: status.openaps?.iob?.basaliob,
+      //     bolusIOB: status.openaps?.iob?.bolusiob,
+      //     pumpBasalIOB: status.openaps?.iob?.pumpBasalIOB,
+      //     time: status.openaps?.iob?.time
+      //   });
+      // });
   
       // Use the nightscoutClient's uploadDeviceStatus method
       return await nightscoutClient.uploadDeviceStatus(deviceStatuses);

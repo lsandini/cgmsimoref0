@@ -241,7 +241,7 @@ async function main() {
     // Upload treatments if any
     if (treatmentsToUpload.length > 0) {
       try {
-        logger.info(`Uploading ${treatmentsToUpload.length} treatments to Nightscout`);
+        //logger.info(`Uploading ${treatmentsToUpload.length} treatments to Nightscout`);
         await treatmentsAPI.uploadTreatments(treatmentsToUpload);
         logger.info('Treatments uploaded successfully');
       } catch (error) {

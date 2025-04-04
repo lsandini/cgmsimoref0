@@ -14,10 +14,10 @@ function createTreatmentsAPI(nightscoutClient) {
    */
   async function uploadTreatments(treatments) {
     try {
-      logger.debug(`Uploading ${treatments.length} treatments to Nightscout`);
+      //logger.debug(`Uploading ${treatments.length} treatments to Nightscout`);
       
       if (treatments.length > 0) {
-        logger.debug(`Sample treatment being uploaded: ${JSON.stringify(treatments[0])}`);
+        //logger.debug(`Sample treatment being uploaded: ${JSON.stringify(treatments[0])}`);
       }
       
       return await nightscoutClient.uploadTreatments(treatments);

@@ -1,0 +1,44 @@
+to use local cgmsim-lib:
+
+{
+  "name": "cgmsimoref0",
+  "version": "1.0.0",
+  "description": "OpenAPS simulation",
+  "main": "index.js",
+  "scripts": {
+    "start": "node app.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@lsandini/cgmsim-lib": "file:../cgmsim-lib#uploadTx",
+    "dotenv": "^16.4.7",
+    "moment": "^2.30.1",
+    "node-cron": "^3.0.3",
+    "node-fetch": "^2.7.0",
+    "oref0": "^0.7.1"
+  }
+}
+
+
+{
+  "name": "cgmsimoref0",
+  "version": "1.0.0",
+  "description": "OpenAPS simulation",
+  "main": "index.js",
+  "scripts": {
+    "start": "node app.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@lsandini/cgmsim-lib": "^0.8.1",
+    "dotenv": "^16.4.7",
+    "moment": "^2.30.1",
+    "node-cron": "^3.0.3",
+    "node-fetch": "^2.7.0",
+    "oref0": "^0.7.1"
+  }
+}
