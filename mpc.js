@@ -78,7 +78,6 @@ async function main() {
     
     // Add preferences to profile
     const profileWithPrefs = profileTransforms.addPreferencesToProfile(openAPSProfile, config.preferences);
-    console.log('@@ profileWithPrefs: ',profileWithPrefs);
     
     logger.info('Profile transformation complete');
     

@@ -10,7 +10,7 @@ const {
 } = require("@lsandini/cgmsim-lib");
 
 /**
- * Get CGM entries from Nightscout
+ * Get CGM entries from Nightscout using library's downloads function
  * @param {string} baseUrl - Nightscout URL
  * @param {string} apiSecret - API secret for Nightscout
  * @param {number} count - Number of entries to retrieve
@@ -18,55 +18,25 @@ const {
  */
 async function getEntries(baseUrl, apiSecret, count = 144) {
   try {
-    logger.debug(`Fetching ${count} entries from Nightscout`);
+    logger.debug(`Fetching ${count} entries from Nightscout using downloads()`);
 
-    // Custom implementation to fetch the required number of entries
-    const url = baseUrl.endsWith("/") ? baseUrl.slice(0, -1) : baseUrl;
-    const isHttps = url.startsWith("https");
+    // Use the modified downloads function with the count parameter for glucose entries
+    const data = await downloads(baseUrl, apiSecret, count, ['entries']);
 
-    // Create a hash of the API secret
-    const crypto = require("crypto");
-    const hash = crypto.createHash("sha1");
-    hash.update(apiSecret);
-    const hashedSecret = hash.digest("hex");
-
-    // Create headers with the hashed secret
-    const headers = {
-      "Content-Type": "application/json",
-      "api-secret": hashedSecret,
-    };
-
-    // Create the HTTPS agent if needed
-    const agent = isHttps
-      ? new (require("https").Agent)({ rejectUnauthorized: false })
-      : null;
-
-    const endpoint = `${url}/api/v1/entries.json?count=${count}`;
-    const response = await fetch(endpoint, {
-      method: "GET",
-      headers,
-      agent,
-    });
-
-    if (!response.ok) {
-      throw new Error(`HTTP error! Status: ${response.status}`);
-    }
-
-    const data = await response.json();
-    logger.debug(`Received ${data.length} entries from Nightscout`);
-
+    logger.debug(`Received ${data.entries.length} entries from Nightscout`);
+    
     // Log a sample of the data
-    if (data.length > 0) {
-      logger.debug(`Sample entry: ${JSON.stringify(data[0])}`);
+    if (data.entries.length > 0) {
+      logger.debug(`Sample entry: ${JSON.stringify(data.entries[0])}`);
       logger.debug(
-        `First few entries timestamps: ${data
+        `First few entries timestamps: ${data.entries
           .slice(0, 5)
-          .map((e) => e.dateString || new Date(e.date).toISOString())
+          .map((e) => new Date(e.mills).toISOString())
           .join(", ")}`
       );
     }
 
-    return data;
+    return data.entries;
   } catch (error) {
     logger.error(`Error fetching entries from Nightscout: ${error.message}`);
     throw error;
@@ -86,7 +56,7 @@ async function getTreatments(baseUrl, apiSecret, count = 288) {
       `Fetching ${count} treatments from Nightscout using downloads()`
     );
 
-    const data = await downloads(baseUrl, apiSecret);
+    const data = await downloads(baseUrl, apiSecret, ['treatments']);
 
     logger.info(
       `TREATMENTS COMPARISON: downloads() returned ${data.treatments.length} treatments vs requested ${count} treatments`
@@ -121,7 +91,7 @@ async function getProfile(baseUrl, apiSecret) {
   try {
     logger.debug("Fetching profile from Nightscout");
 
-    const data = await downloads(baseUrl, apiSecret);
+    const data = await downloads(baseUrl, apiSecret, ['profiles']);
 
     if (data.profiles && data.profiles.length > 0) {
       logger.debug(`Successfully retrieved profile from Nightscout`);
